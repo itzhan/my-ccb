@@ -80,15 +80,15 @@ async fn main() {
     let token_tester = Arc::new(service::oauth::TokenTester::new());
     let oauth_flow_svc = Arc::new(service::oauth_flow::OAuthFlowService::new());
 
-    // 后台定时拉取 OAuth 账户用量数据
-    let usage_poller = Arc::new(service::usage_poller::UsagePollerService::new(
-        account_svc.clone(),
-        cfg.usage_poll_interval,
-    ));
-    tokio::spawn({
-        let poller = usage_poller.clone();
-        async move { poller.run().await }
-    });
+    // 后台定时拉取 OAuth 账户用量数据（已禁用：频繁查询可能导致封号，仅保留用户手动查询）
+    // let usage_poller = Arc::new(service::usage_poller::UsagePollerService::new(
+    //     account_svc.clone(),
+    //     cfg.usage_poll_interval,
+    // ));
+    // tokio::spawn({
+    //     let poller = usage_poller.clone();
+    //     async move { poller.run().await }
+    // });
 
     let app = handler::router::build_router(
         &cfg,

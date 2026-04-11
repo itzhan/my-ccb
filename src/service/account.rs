@@ -407,28 +407,6 @@ impl AccountService {
             }
         }
 
-        // 后台异步刷新 usage（仅 OAuth，不阻塞主流程）
-        if account.auth_type == AccountAuthType::Oauth {
-            let store = self.store.clone();
-            let account_id = account.id;
-            let proxy_url = account.proxy_url.clone();
-            let access_token = account.access_token.clone();
-            tokio::spawn(async move {
-                // 尝试用当前 token 拉 usage
-                if !access_token.is_empty() {
-                    match crate::service::oauth::fetch_usage(&access_token, &proxy_url).await {
-                        Ok(usage) => {
-                            let usage_str = serde_json::to_string(&usage).unwrap_or_else(|_| "{}".into());
-                            let _ = store.update_usage(account_id, &usage_str).await;
-                        }
-                        Err(e) => {
-                            warn!("background usage fetch failed for account {}: {}", account_id, e);
-                        }
-                    }
-                }
-            });
-        }
-
         classification
     }
 }
