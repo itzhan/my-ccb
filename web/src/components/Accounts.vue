@@ -488,6 +488,7 @@ function applyOAuthResult() {
     concurrency: 3,
     priority: 50,
     auto_telemetry: false,
+    rpm_limit: 0,
   };
   showForm.value = true;
 }
