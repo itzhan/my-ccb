@@ -186,6 +186,9 @@ pub struct Account {
     /// 累计发送的遥测请求次数。
     #[serde(default)]
     pub telemetry_count: i64,
+    /// 每分钟请求限制（0 或 None = 不限）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_limit: Option<i32>,
     #[serde(default)]
     pub usage_data: Value,
     #[serde(skip_serializing_if = "Option::is_none")]

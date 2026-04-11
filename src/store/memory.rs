@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 
 use crate::error::AppError;
-use crate::store::cache::CacheStore;
+use crate::store::cache::{rpm_key, CacheStore, RPM_TTL};
 
 struct SessionEntry {
     account_id: i64,
@@ -15,10 +15,16 @@ struct LockEntry {
     expires_at: tokio::time::Instant,
 }
 
+struct CounterEntry {
+    count: i64,
+    expires_at: tokio::time::Instant,
+}
+
 pub struct MemoryStore {
     sessions: Mutex<HashMap<String, SessionEntry>>,
     slots: Mutex<HashMap<String, i64>>,
     locks: Mutex<HashMap<String, LockEntry>>,
+    counters: Mutex<HashMap<String, CounterEntry>>,
 }
 
 impl MemoryStore {
@@ -27,6 +33,7 @@ impl MemoryStore {
             sessions: Mutex::new(HashMap::new()),
             slots: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
+            counters: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -120,5 +127,54 @@ impl CacheStore for MemoryStore {
                 locks.remove(key);
             }
         }
+    }
+
+    async fn incr_rpm(&self, account_id: i64) -> Result<i64, AppError> {
+        let key = rpm_key(account_id);
+        let mut counters = self.counters.lock().await;
+        let now = tokio::time::Instant::now();
+        let entry = counters.entry(key).or_insert(CounterEntry {
+            count: 0,
+            expires_at: now + RPM_TTL,
+        });
+        if now > entry.expires_at {
+            entry.count = 0;
+            entry.expires_at = now + RPM_TTL;
+        }
+        entry.count += 1;
+        Ok(entry.count)
+    }
+
+    async fn get_rpm(&self, account_id: i64) -> Result<i64, AppError> {
+        let key = rpm_key(account_id);
+        let mut counters = self.counters.lock().await;
+        let now = tokio::time::Instant::now();
+        if let Some(entry) = counters.get(&key) {
+            if now <= entry.expires_at {
+                return Ok(entry.count);
+            }
+            counters.remove(&key);
+        }
+        Ok(0)
+    }
+
+    async fn get_rpm_batch(&self, account_ids: &[i64]) -> Result<HashMap<i64, i64>, AppError> {
+        let mut result = HashMap::new();
+        let mut counters = self.counters.lock().await;
+        let now = tokio::time::Instant::now();
+        for &id in account_ids {
+            let key = rpm_key(id);
+            if let Some(entry) = counters.get(&key) {
+                if now <= entry.expires_at {
+                    result.insert(id, entry.count);
+                } else {
+                    counters.remove(&key);
+                    result.insert(id, 0);
+                }
+            } else {
+                result.insert(id, 0);
+            }
+        }
+        Ok(result)
     }
 }

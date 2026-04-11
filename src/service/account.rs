@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -19,12 +19,25 @@ const OAUTH_LOCK_TTL: Duration = Duration::from_secs(30);
 const OAUTH_WAIT_RETRY: Duration = Duration::from_millis(500);
 const OAUTH_WAIT_ATTEMPTS: usize = 20;
 
-/// 用量利用率达到此阈值即视为“撞墙”。
+/// 用量利用率达到此阈值即视为”撞墙”。
 const USAGE_HIT_THRESHOLD: f64 = 97.0;
 /// 撞墙之外的纯速率限制的短冷却时间。
 const PURE_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 /// 无法确定限流原因时的保守限流时长（与历史行为一致）。
 const FALLBACK_QUARANTINE: Duration = Duration::from_secs(5 * 60 * 60);
+
+/// 429 限流分类结果。
+#[derive(Debug, Clone, PartialEq)]
+pub enum RateLimitClassification {
+    /// 7 天用量墙命中，隔离到 reset 时间。
+    SevenDayWall(chrono::DateTime<Utc>),
+    /// 5 小时用量墙命中，隔离到 reset 时间。
+    FiveHourWall(chrono::DateTime<Utc>),
+    /// 纯速率限制（未撞墙），短冷却。
+    BurstRateLimit,
+    /// 非真实 429（如 “Extra usage required”），不隔离。
+    NotRealRateLimit,
+}
 
 pub struct AccountService {
     store: Arc<AccountStore>,
@@ -284,6 +297,21 @@ impl AccountService {
         }
     }
 
+    /// 获取账号当前分钟 RPM 计数。
+    pub async fn get_rpm(&self, account_id: i64) -> i64 {
+        self.cache.get_rpm(account_id).await.unwrap_or(0)
+    }
+
+    /// 批量获取多个账号的 RPM 计数。
+    pub async fn get_rpm_batch(&self, account_ids: &[i64]) -> std::collections::HashMap<i64, i64> {
+        self.cache.get_rpm_batch(account_ids).await.unwrap_or_default()
+    }
+
+    /// 递增账号 RPM 计数（成功转发后调用）。
+    pub async fn incr_rpm(&self, account_id: i64) -> i64 {
+        self.cache.incr_rpm(account_id).await.unwrap_or(0)
+    }
+
     pub async fn set_rate_limit(
         &self,
         id: i64,
@@ -308,71 +336,198 @@ impl AccountService {
         self.store.enable_account(id).await
     }
 
-    /// 处理上游返回 429 的情况：根据账号类型和用量数据决定限流时长和原因。
+    /// 处理上游返回 429 的情况。
     ///
-    /// - **SetupToken**：无法查询用量接口，保守限流 5h（与历史行为一致）。
-    /// - **OAuth**：立即拉取 `/api/oauth/usage` 判断是否撞墙：
-    ///   - 命中 7 天墙 → 限流到周重置时间
-    ///   - 命中 5 小时墙 → 限流到 5h 重置时间
-    ///   - 都没撞墙 → 纯速率限制，短冷却 1 分钟
-    ///   - usage 接口调用失败 → 回退到 5h 保守限流
-    ///
-    /// Sonnet 7 天墙暂不纳入判断（上游可能只对 Sonnet 请求返回 429，不影响其他模型）。
-    pub async fn handle_rate_limit(&self, account: &Account) -> Result<(), AppError> {
-        let (reason, reset_at) = self.determine_rate_limit_window(account).await;
-        warn!(
-            "account {} rate limited ({}) until {}",
-            account.id,
-            reason,
-            reset_at.to_rfc3339()
-        );
-        self.store
-            .disable_account(
-                account.id,
-                crate::model::account::AccountStatus::Active,
-                reason,
-                Some(reset_at),
-            )
-            .await
-    }
-
-    async fn determine_rate_limit_window(
+    /// 优先从响应头解析限流窗口（SetupToken/OAuth 统一），不再同步调 usage API。
+    /// 返回分类结果供重试循环决策。
+    pub async fn handle_rate_limit(
         &self,
         account: &Account,
-    ) -> (&'static str, chrono::DateTime<Utc>) {
+        upstream_headers: &reqwest::header::HeaderMap,
+    ) -> RateLimitClassification {
+        let classification = classify_from_headers(upstream_headers);
         let now = Utc::now();
-        let fallback = || {
-            (
-                "429 速率限制",
-                now + chrono::Duration::from_std(FALLBACK_QUARANTINE).unwrap(),
-            )
-        };
 
-        if account.auth_type != AccountAuthType::Oauth {
-            return fallback();
-        }
-
-        let usage = match self.refresh_usage(account.id).await {
-            Ok(u) => u,
-            Err(e) => {
-                warn!(
-                    "failed to fetch usage for rate-limited oauth account {}: {}",
-                    account.id, e
+        match &classification {
+            RateLimitClassification::SevenDayWall(reset_at) => {
+                info!(
+                    "account {} hit 7-day wall, quarantine until {}",
+                    account.id,
+                    reset_at.to_rfc3339()
                 );
-                return fallback();
+                let _ = self
+                    .store
+                    .disable_account(
+                        account.id,
+                        crate::model::account::AccountStatus::Active,
+                        "周限额已满",
+                        Some(*reset_at),
+                    )
+                    .await;
             }
-        };
-
-        match classify_rate_limit(&usage, USAGE_HIT_THRESHOLD) {
-            Some(RateLimitWindow::SevenDay(reset_at)) => ("周限额已满", reset_at),
-            Some(RateLimitWindow::FiveHour(reset_at)) => ("5 小时限额已满", reset_at),
-            None => (
-                "速率限制（未达用量墙）",
-                now + chrono::Duration::from_std(PURE_RATE_LIMIT_COOLDOWN).unwrap(),
-            ),
+            RateLimitClassification::FiveHourWall(reset_at) => {
+                info!(
+                    "account {} hit 5-hour wall, quarantine until {}",
+                    account.id,
+                    reset_at.to_rfc3339()
+                );
+                let _ = self
+                    .store
+                    .disable_account(
+                        account.id,
+                        crate::model::account::AccountStatus::Active,
+                        "5 小时限额已满",
+                        Some(*reset_at),
+                    )
+                    .await;
+            }
+            RateLimitClassification::BurstRateLimit => {
+                let reset_at =
+                    now + chrono::Duration::from_std(PURE_RATE_LIMIT_COOLDOWN).unwrap();
+                info!(
+                    "account {} burst rate limited, short cooldown until {}",
+                    account.id,
+                    reset_at.to_rfc3339()
+                );
+                let _ = self
+                    .store
+                    .disable_account(
+                        account.id,
+                        crate::model::account::AccountStatus::Active,
+                        "速率限制（未达用量墙）",
+                        Some(reset_at),
+                    )
+                    .await;
+            }
+            RateLimitClassification::NotRealRateLimit => {
+                warn!(
+                    "account {} got 429 without rate limit headers, not quarantining (likely not a real rate limit)",
+                    account.id
+                );
+            }
         }
+
+        // 后台异步刷新 usage（仅 OAuth，不阻塞主流程）
+        if account.auth_type == AccountAuthType::Oauth {
+            let store = self.store.clone();
+            let account_id = account.id;
+            let proxy_url = account.proxy_url.clone();
+            let access_token = account.access_token.clone();
+            tokio::spawn(async move {
+                // 尝试用当前 token 拉 usage
+                if !access_token.is_empty() {
+                    match crate::service::oauth::fetch_usage(&access_token, &proxy_url).await {
+                        Ok(usage) => {
+                            let usage_str = serde_json::to_string(&usage).unwrap_or_else(|_| "{}".into());
+                            let _ = store.update_usage(account_id, &usage_str).await;
+                        }
+                        Err(e) => {
+                            warn!("background usage fetch failed for account {}: {}", account_id, e);
+                        }
+                    }
+                }
+            });
+        }
+
+        classification
     }
 }
+
+// ---------------------------------------------------------------------------
+// Anthropic 429 响应头解析（参照 sub2api ratelimit_service.go）
+// ---------------------------------------------------------------------------
+
+/// 从 Anthropic 429 响应头判断限流类型。
+///
+/// 解析 `anthropic-ratelimit-unified-{5h,7d}-{reset,utilization,surpassed-threshold}` 头，
+/// 不依赖 usage API。SetupToken 和 OAuth 统一走此路径。
+pub fn classify_from_headers(headers: &reqwest::header::HeaderMap) -> RateLimitClassification {
+    let five_h_exceeded = is_window_exceeded(headers, "5h");
+    let seven_d_exceeded = is_window_exceeded(headers, "7d");
+
+    let five_h_reset = parse_reset_header(headers, "5h");
+    let seven_d_reset = parse_reset_header(headers, "7d");
+
+    // 检查聚合 reset 头（兜底）
+    let unified_reset = headers
+        .get("anthropic-ratelimit-unified-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .map(|ts| chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default());
+
+    let has_any_reset = five_h_reset.is_some() || seven_d_reset.is_some() || unified_reset.is_some();
+
+    // 选择逻辑：优先看哪个窗口超限
+    if seven_d_exceeded {
+        if let Some(reset) = seven_d_reset.or(five_h_reset).or(unified_reset) {
+            return RateLimitClassification::SevenDayWall(reset);
+        }
+    }
+    if five_h_exceeded {
+        if let Some(reset) = five_h_reset.or(seven_d_reset).or(unified_reset) {
+            return RateLimitClassification::FiveHourWall(reset);
+        }
+    }
+
+    // 都没超限但有 reset 头 → 纯速率限制
+    if has_any_reset {
+        return RateLimitClassification::BurstRateLimit;
+    }
+
+    // Retry-After 兜底
+    if let Some(retry_after) = headers
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        if retry_after > 0 {
+            return RateLimitClassification::BurstRateLimit;
+        }
+    }
+
+    // 没有任何限流头 → 非真实 429
+    RateLimitClassification::NotRealRateLimit
+}
+
+/// 检查指定窗口是否超限。
+fn is_window_exceeded(headers: &reqwest::header::HeaderMap, window: &str) -> bool {
+    // 1. surpassed-threshold 头（最明确）
+    let threshold_key = format!("anthropic-ratelimit-unified-{}-surpassed-threshold", window);
+    if let Some(val) = headers.get(threshold_key.as_str()).and_then(|v| v.to_str().ok()) {
+        if val.eq_ignore_ascii_case("true") {
+            return true;
+        }
+    }
+    // 2. utilization >= 1.0
+    let util_key = format!("anthropic-ratelimit-unified-{}-utilization", window);
+    if let Some(val) = headers.get(util_key.as_str()).and_then(|v| v.to_str().ok()) {
+        if let Ok(util) = val.parse::<f64>() {
+            if util >= 1.0 - 1e-9 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 解析指定窗口的 reset Unix 时间戳头。
+fn parse_reset_header(
+    headers: &reqwest::header::HeaderMap,
+    window: &str,
+) -> Option<chrono::DateTime<Utc>> {
+    let key = format!("anthropic-ratelimit-unified-{}-reset", window);
+    let val = headers.get(key.as_str())?.to_str().ok()?;
+    let ts = val.parse::<i64>().ok()?;
+    let dt = chrono::DateTime::from_timestamp(ts, 0)?;
+    if dt <= Utc::now() {
+        return None;
+    }
+    Some(dt)
+}
+
+// ---------------------------------------------------------------------------
+// 旧 usage JSON 分类（保留用于 dashboard 用量查询等场景）
+// ---------------------------------------------------------------------------
 
 /// 命中的用量窗口类型。
 enum RateLimitWindow {

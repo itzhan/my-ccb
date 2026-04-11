@@ -1,8 +1,9 @@
 use redis::AsyncCommands;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::error::AppError;
-use crate::store::cache::CacheStore;
+use crate::store::cache::{rpm_key, CacheStore, RPM_TTL};
 
 pub struct RedisStore {
     client: redis::aio::ConnectionManager,
@@ -133,5 +134,53 @@ impl CacheStore for RedisStore {
             "#,
         );
         let _: Result<i32, _> = script.key(key).arg(owner).invoke_async(&mut conn).await;
+    }
+
+    async fn incr_rpm(&self, account_id: i64) -> Result<i64, AppError> {
+        let key = rpm_key(account_id);
+        let mut conn = self.client.clone();
+        let val: i64 = conn
+            .incr(&key, 1i64)
+            .await
+            .map_err(|e| AppError::Internal(format!("redis incr rpm: {}", e)))?;
+        if val == 1 {
+            let _: () = conn
+                .expire(&key, RPM_TTL.as_secs() as i64)
+                .await
+                .unwrap_or(());
+        }
+        Ok(val)
+    }
+
+    async fn get_rpm(&self, account_id: i64) -> Result<i64, AppError> {
+        let key = rpm_key(account_id);
+        let val: Option<i64> = self
+            .client
+            .clone()
+            .get(&key)
+            .await
+            .map_err(|e| AppError::Internal(format!("redis get rpm: {}", e)))?;
+        Ok(val.unwrap_or(0))
+    }
+
+    async fn get_rpm_batch(&self, account_ids: &[i64]) -> Result<HashMap<i64, i64>, AppError> {
+        if account_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let keys: Vec<String> = account_ids.iter().map(|&id| rpm_key(id)).collect();
+        let mut conn = self.client.clone();
+        let mut pipe = redis::pipe();
+        for key in &keys {
+            pipe.get(key);
+        }
+        let results: Vec<Option<i64>> = pipe
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("redis get rpm batch: {}", e)))?;
+        let mut map = HashMap::new();
+        for (i, &id) in account_ids.iter().enumerate() {
+            map.insert(id, results.get(i).copied().flatten().unwrap_or(0));
+        }
+        Ok(map)
     }
 }

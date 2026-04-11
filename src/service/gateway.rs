@@ -4,18 +4,28 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::error::AppError;
 use crate::model::account::{Account, AccountStatus};
 use crate::model::api_token::ApiToken;
-use crate::service::account::AccountService;
+use crate::service::account::{AccountService, RateLimitClassification};
 use crate::service::rewriter::{
     clean_session_id_from_body, detect_client_type, ClientType, Rewriter,
 };
 use crate::service::telemetry::TelemetryService;
 
 const UPSTREAM_BASE: &str = "https://api.anthropic.com";
+
+/// 最大换号次数。
+const MAX_ACCOUNT_SWITCHES: usize = 5;
+/// 换号间隔延迟。
+const SWITCH_DELAY: Duration = Duration::from_millis(500);
+/// 同账号 BurstRateLimit 最大重试次数。
+const MAX_SAME_ACCOUNT_RETRIES: usize = 3;
+/// 同账号重试间隔。
+const SAME_ACCOUNT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 pub struct GatewayService {
     account_svc: Arc<AccountService>,
@@ -79,9 +89,12 @@ impl GatewayService {
             (vec![], vec![])
         };
 
-        // 429 自动换号重试循环
+        // 429 自动换号重试循环（带延迟、上限、分类决策）
         let mut exclude_ids = blocked_ids.clone();
         let mut last_resp: Option<Response> = None;
+        let mut switch_count: usize = 0;
+        let mut same_account_retries: std::collections::HashMap<i64, usize> =
+            std::collections::HashMap::new();
 
         loop {
             let attempt = exclude_ids.len().saturating_sub(blocked_ids.len());
@@ -93,7 +106,6 @@ impl GatewayService {
             {
                 Ok(a) => a,
                 Err(_) if last_resp.is_some() => {
-                    // 无可用账号但有上一次的 429 响应，返回给客户端
                     return Ok(last_resp.unwrap());
                 }
                 Err(e) => {
@@ -106,9 +118,24 @@ impl GatewayService {
 
             if attempt > 0 {
                 warn!(
-                    "429 retry attempt {} with account {}",
-                    attempt, account.id
+                    "429 retry attempt {} with account {} (switch {})",
+                    attempt, account.id, switch_count
                 );
+            }
+
+            // RPM 检查：超限则排除该账号
+            if let Some(rpm_limit) = account.rpm_limit {
+                if rpm_limit > 0 {
+                    let current_rpm = self.account_svc.get_rpm(account.id).await;
+                    if current_rpm >= rpm_limit as i64 {
+                        warn!(
+                            "account {} rpm exceeded ({}/{}), skipping",
+                            account.id, current_rpm, rpm_limit
+                        );
+                        exclude_ids.push(account.id);
+                        continue;
+                    }
+                }
             }
 
             // 自动遥测：拦截遥测请求 + 激活会话
@@ -196,7 +223,7 @@ impl GatewayService {
             );
 
             // 转发到上游
-            let resp = self
+            let (upstream_status, upstream_headers, resp) = self
                 .forward_request(
                     &method.to_string(),
                     &path,
@@ -208,24 +235,71 @@ impl GatewayService {
                 .await?;
 
             // 非 429 直接返回
-            if resp.status() != StatusCode::TOO_MANY_REQUESTS {
+            if upstream_status != StatusCode::TOO_MANY_REQUESTS {
+                // 成功转发，递增 RPM
+                if upstream_status.is_success() || upstream_status.is_informational() || upstream_status == StatusCode::OK {
+                    self.account_svc.incr_rpm(account.id).await;
+                }
                 return Ok(resp);
             }
 
-            // 429：排除该账号，尝试下一个
-            warn!(
-                "account {} returned 429, excluding and retrying (attempt {})",
-                account.id,
-                attempt + 1,
-            );
+            // 429：根据响应头分类决策
+            let classification = self
+                .account_svc
+                .handle_rate_limit(&account, &upstream_headers)
+                .await;
+
+            match classification {
+                RateLimitClassification::NotRealRateLimit => {
+                    // 非真实 429，直接透传给客户端
+                    return Ok(resp);
+                }
+                RateLimitClassification::BurstRateLimit => {
+                    // 同账号重试
+                    let retries = same_account_retries.entry(account.id).or_insert(0);
+                    if *retries < MAX_SAME_ACCOUNT_RETRIES {
+                        *retries += 1;
+                        warn!(
+                            "account {} burst rate limited, same-account retry {}/{}",
+                            account.id, *retries, MAX_SAME_ACCOUNT_RETRIES
+                        );
+                        // 释放槽位后等待
+                        std::mem::forget(_guard);
+                        self.account_svc.release_slot(account.id).await;
+                        tokio::time::sleep(SAME_ACCOUNT_RETRY_DELAY).await;
+                        last_resp = Some(resp);
+                        continue; // 不排除账号，重试
+                    }
+                    // 同账号重试用尽，换号
+                }
+                RateLimitClassification::FiveHourWall(_)
+                | RateLimitClassification::SevenDayWall(_) => {
+                    // 撞墙：账号已被 handle_rate_limit 隔离，直接换号
+                }
+            }
+
+            // 换号
+            if switch_count >= MAX_ACCOUNT_SWITCHES {
+                warn!(
+                    "max account switches ({}) reached, returning last 429",
+                    MAX_ACCOUNT_SWITCHES
+                );
+                return Ok(resp);
+            }
+
             exclude_ids.push(account.id);
-            // 取消 scopeguard 并手动释放槽位，避免重复释放
+            switch_count += 1;
             std::mem::forget(_guard);
             self.account_svc.release_slot(account.id).await;
             last_resp = Some(resp);
+
+            // 换号延迟
+            tokio::time::sleep(SWITCH_DELAY).await;
         }
     }
 
+    /// 转发请求到上游，返回 (状态码, 上游响应头, axum Response)。
+    /// 状态码和响应头在构建 Response 前 clone 出来，供重试循环判断。
     async fn forward_request(
         &self,
         method: &str,
@@ -234,7 +308,7 @@ impl GatewayService {
         headers: &std::collections::HashMap<String, String>,
         body: &[u8],
         account: &Account,
-    ) -> Result<Response, AppError> {
+    ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response), AppError> {
         let mut target_url = format!("{}{}", UPSTREAM_BASE, path);
         if !query.is_empty() {
             let q = if query.contains("beta=true") {
@@ -275,23 +349,16 @@ impl GatewayService {
                 AppError::BadGateway("upstream request failed".into())
             })?;
 
-        let status_code = resp.status().as_u16();
-        debug!("upstream response: {}", status_code);
+        let status_code_u16 = resp.status().as_u16();
+        let status_code = StatusCode::from_u16(status_code_u16)
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        debug!("upstream response: {}", status_code_u16);
 
-        // 处理限速：429 根据账号类型分别处理
-        // - SetupToken: 保守 5h 限流
-        // - OAuth: 查用量判断是撞墙（5h / 7d）还是纯 rate limit，分别设置限流时长
-        if status_code == 429 {
-            if let Err(e) = self.account_svc.handle_rate_limit(account).await {
-                warn!(
-                    "failed to handle rate limit for account {}: {}",
-                    account.id, e
-                );
-            }
-        }
+        // clone 上游响应头（在消费 body stream 之前）
+        let upstream_headers = resp.headers().clone();
 
         // 处理认证失败：403 永久停用（但如果账号已处于 429 限流中则跳过，避免误判）
-        if status_code == 403 {
+        if status_code_u16 == 403 {
             let is_rate_limited = account
                 .rate_limit_reset_at
                 .map(|reset| Utc::now() < reset)
@@ -318,14 +385,10 @@ impl GatewayService {
         }
 
         // 构建响应
-        let mut response_builder = Response::builder().status(
-            StatusCode::from_u16(status_code)
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        );
+        let mut response_builder = Response::builder().status(status_code);
 
-        for (k, v) in resp.headers() {
+        for (k, v) in &upstream_headers {
             let name = k.as_str();
-            // 过滤已知 AI Gateway / 代理指纹响应头，防止客户端检测并上报
             if is_gateway_fingerprint_header(name) {
                 continue;
             }
@@ -334,11 +397,13 @@ impl GatewayService {
 
         // 流式传输响应体
         let body_stream = resp.bytes_stream();
-        let body = Body::from_stream(body_stream);
+        let axum_body = Body::from_stream(body_stream);
 
-        response_builder
-            .body(body)
-            .map_err(|e| AppError::Internal(format!("build response: {}", e)))
+        let response = response_builder
+            .body(axum_body)
+            .map_err(|e| AppError::Internal(format!("build response: {}", e)))?;
+
+        Ok((status_code, upstream_headers, response))
     }
 
 }

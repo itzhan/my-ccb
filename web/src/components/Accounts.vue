@@ -47,6 +47,7 @@ const form = ref({
   concurrency: 3,
   priority: 50,
   auto_telemetry: false,
+  rpm_limit: 0,
 });
 /** 正在测试的账号 ID */
 const testing = ref<number | null>(null);
@@ -123,6 +124,7 @@ function openCreate() {
     concurrency: 3,
     priority: 50,
     auto_telemetry: false,
+    rpm_limit: 0,
   };
   showForm.value = true;
 }
@@ -149,6 +151,7 @@ function openEdit(a: Account) {
     concurrency: a.concurrency,
     priority: a.priority,
     auto_telemetry: a.auto_telemetry ?? false,
+    rpm_limit: a.rpm_limit || 0,
   };
   showForm.value = true;
 }
@@ -184,6 +187,7 @@ async function save() {
       updates.concurrency = form.value.concurrency;
       updates.priority = form.value.priority;
       updates.auto_telemetry = form.value.auto_telemetry;
+      updates.rpm_limit = form.value.rpm_limit || 0;
       await api.updateAccount(editing.value.id, updates);
     } else {
       if (form.value.auth_type === 'setup_token' && !form.value.setup_token.trim()) {
@@ -207,6 +211,7 @@ async function save() {
         concurrency: form.value.concurrency,
         priority: form.value.priority,
         auto_telemetry: form.value.auto_telemetry,
+        rpm_limit: form.value.rpm_limit || 0,
       };
       if (expiresAt) payload.expires_at = Number(expiresAt);
       await api.createAccount(payload);
@@ -591,6 +596,19 @@ async function copyText(text: string) {
               </div>
             </div>
             <div class="space-y-3">
+              <div v-if="a.rpm_limit && a.rpm_limit > 0">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">RPM</p>
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 bg-[#f0ebe4] rounded-full h-2 overflow-hidden">
+                    <div
+                      class="h-full rounded-full transition-all"
+                      :class="(a.current_rpm || 0) / a.rpm_limit >= 0.8 ? 'bg-red-500' : (a.current_rpm || 0) / a.rpm_limit >= 0.5 ? 'bg-amber-500' : 'bg-emerald-500'"
+                      :style="{ width: Math.min(100, ((a.current_rpm || 0) / a.rpm_limit) * 100) + '%' }"
+                    />
+                  </div>
+                  <span class="text-xs text-[#8c8475] whitespace-nowrap">{{ a.current_rpm || 0 }} / {{ a.rpm_limit }}</span>
+                </div>
+              </div>
               <div>
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">代理</p>
                 <p class="text-sm text-[#8c8475] truncate">{{ a.proxy_url || '直连' }}</p>
@@ -1044,6 +1062,16 @@ async function copyText(text: string) {
                 class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
               />
             </div>
+          </div>
+          <div class="space-y-2">
+            <Label class="text-[#5c5647] text-sm">RPM 限制 <span class="text-[#b5b0a6] text-xs">(0 = 不限)</span></Label>
+            <Input
+              v-model.number="form.rpm_limit"
+              type="number"
+              min="0"
+              placeholder="0"
+              class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+            />
           </div>
 
           <DialogFooter class="gap-2 pt-2">

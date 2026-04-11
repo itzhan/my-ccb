@@ -139,12 +139,27 @@ async fn list_accounts(
     let (accounts, total) = state.account_svc.list_accounts_paged(page, page_size).await?;
     let total_pages = (total + page_size - 1) / page_size;
 
-    // 为每个账号附加遥测会话过期时间
+    // 批量获取 RPM 计数
+    let rpm_account_ids: Vec<i64> = accounts
+        .iter()
+        .filter(|a| a.rpm_limit.map(|v| v > 0).unwrap_or(false))
+        .map(|a| a.id)
+        .collect();
+    let rpm_counts = if !rpm_account_ids.is_empty() {
+        state.account_svc.get_rpm_batch(&rpm_account_ids).await
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // 为每个账号附加遥测会话过期时间和 current_rpm
     let mut data: Vec<serde_json::Value> = Vec::with_capacity(accounts.len());
     for a in &accounts {
         let mut obj = serde_json::to_value(a).unwrap_or_default();
         if let Some(expires) = state.telemetry_svc.get_session_expires_at(a.id).await {
             obj["telemetry_expires_at"] = serde_json::json!(expires.to_rfc3339());
+        }
+        if a.rpm_limit.map(|v| v > 0).unwrap_or(false) {
+            obj["current_rpm"] = serde_json::json!(rpm_counts.get(&a.id).copied().unwrap_or(0));
         }
         data.push(obj);
     }
@@ -176,6 +191,7 @@ struct CreateAccountRequest {
     concurrency: Option<i32>,
     priority: Option<i32>,
     auto_telemetry: Option<bool>,
+    rpm_limit: Option<i32>,
 }
 
 async fn create_account(
@@ -221,6 +237,7 @@ async fn create_account(
         disable_reason: String::new(),
         auto_telemetry: req.auto_telemetry.unwrap_or(false),
         telemetry_count: 0,
+        rpm_limit: req.rpm_limit.filter(|&v| v > 0),
         usage_data: serde_json::json!({}),
         usage_fetched_at: None,
         created_at: chrono::Utc::now(),
@@ -341,6 +358,10 @@ async fn update_account(
     }
     if let Some(auto_telemetry) = updates.get("auto_telemetry").and_then(|v| v.as_bool()) {
         existing.auto_telemetry = auto_telemetry;
+    }
+    if updates.get("rpm_limit").is_some() {
+        let val = updates.get("rpm_limit").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+        existing.rpm_limit = if val > 0 { Some(val) } else { None };
     }
 
     state.account_svc.update_account(&existing).await?;

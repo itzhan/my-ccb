@@ -56,6 +56,8 @@ export interface Account {
   rate_limited_at?: string
   rate_limit_reset_at?: string
   disable_reason?: string
+  rpm_limit?: number | null
+  current_rpm?: number | null
   usage_data?: UsageData
   usage_fetched_at?: string
   created_at: string
