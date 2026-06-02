@@ -76,6 +76,7 @@ async fn main() {
         account_svc.clone(),
         rewriter.clone(),
         telemetry_svc.clone(),
+        service::client_guard::ClientRestriction::from_env(&cfg.client_restriction),
     ));
     let token_tester = Arc::new(service::oauth::TokenTester::new());
     let oauth_flow_svc = Arc::new(service::oauth_flow::OAuthFlowService::new());

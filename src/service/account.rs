@@ -175,6 +175,20 @@ impl AccountService {
         self.cache.release_slot(&key).await;
     }
 
+    /// 尝试获取 API 令牌维度的并发槽位。
+    pub async fn acquire_token_slot(&self, token_id: i64, max: i32) -> Result<bool, AppError> {
+        let key = format!("concurrency:token:{}", token_id);
+        self.cache
+            .acquire_slot(&key, max, Duration::from_secs(300))
+            .await
+    }
+
+    /// 释放 API 令牌维度的并发槽位。
+    pub async fn release_token_slot(&self, token_id: i64) {
+        let key = format!("concurrency:token:{}", token_id);
+        self.cache.release_slot(&key).await;
+    }
+
     /// 从 Anthropic API 获取账号用量并缓存到数据库。
     /// 仅支持 OAuth 账号，SetupToken 账号无法查询用量。
     pub async fn refresh_usage(&self, id: i64) -> Result<serde_json::Value, AppError> {

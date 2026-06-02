@@ -26,7 +26,23 @@ const deleteTargetId = ref<number | null>(null);
 /** 当前编辑的令牌 */
 const editing = ref<ApiToken | null>(null);
 /** 表单数据 */
-const form = ref({ name: '', allowed_accounts: '', blocked_accounts: '' });
+const form = ref({ name: '', allowed_accounts: '', blocked_accounts: '', concurrency: 0, expires_at: '' });
+
+/** ISO 字符串 → datetime-local 输入值（本地时区） */
+function isoToLocalInput(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const off = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - off).toISOString().slice(0, 16);
+}
+
+/** datetime-local 输入值 → RFC3339（带时区），空串返回 null */
+function localInputToIso(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
 /** 已复制的令牌 ID */
 const copiedId = ref<number | null>(null);
 
@@ -58,7 +74,7 @@ onMounted(() => {
 /** 打开新建令牌弹窗 */
 function openCreate() {
   editing.value = null;
-  form.value = { name: '', allowed_accounts: '', blocked_accounts: '' };
+  form.value = { name: '', allowed_accounts: '', blocked_accounts: '', concurrency: 0, expires_at: '' };
   showForm.value = true;
 }
 
@@ -72,6 +88,8 @@ function openEdit(t: ApiToken) {
     name: t.name,
     allowed_accounts: t.allowed_accounts,
     blocked_accounts: t.blocked_accounts,
+    concurrency: t.concurrency ?? 0,
+    expires_at: isoToLocalInput(t.expires_at),
   };
   showForm.value = true;
 }
@@ -84,12 +102,16 @@ async function save() {
         name: form.value.name,
         allowed_accounts: form.value.allowed_accounts,
         blocked_accounts: form.value.blocked_accounts,
+        concurrency: Number(form.value.concurrency) || 0,
+        expires_at: localInputToIso(form.value.expires_at),
       });
     } else {
       await api.createToken({
         name: form.value.name,
         allowed_accounts: form.value.allowed_accounts,
         blocked_accounts: form.value.blocked_accounts,
+        concurrency: Number(form.value.concurrency) || 0,
+        expires_at: localInputToIso(form.value.expires_at),
       });
     }
     showForm.value = false;
@@ -279,6 +301,18 @@ function isAccountSelected(field: 'allowed' | 'blocked', id: number): boolean {
               <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">不可用账号</p>
               <p class="text-xs text-[#8c8475] truncate">{{ formatAccountIds(t.blocked_accounts) }}</p>
             </div>
+            <div class="flex gap-4">
+              <div class="flex-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">并发上限</p>
+                <p class="text-xs text-[#8c8475] truncate">{{ t.concurrency > 0 ? t.concurrency : '不限制' }}</p>
+              </div>
+              <div class="flex-1">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">过期时间</p>
+                <p class="text-xs text-[#8c8475] truncate">
+                  {{ t.expires_at ? new Date(t.expires_at).toLocaleString('zh-CN') : '永不过期' }}
+                </p>
+              </div>
+            </div>
           </div>
 
           <!-- 操作按钮 -->
@@ -389,6 +423,27 @@ function isAccountSelected(field: 'allowed' | 'blocked', id: number): boolean {
               >
                 #{{ a.id }} {{ a.name || a.email }}
               </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-2">
+              <Label class="text-[#5c5647] text-sm">并发上限（0=不限）</Label>
+              <Input
+                v-model.number="form.concurrency"
+                type="number"
+                min="0"
+                placeholder="0"
+                class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+              />
+            </div>
+            <div class="space-y-2">
+              <Label class="text-[#5c5647] text-sm">过期时间（选填）</Label>
+              <Input
+                v-model="form.expires_at"
+                type="datetime-local"
+                class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+              />
             </div>
           </div>
 

@@ -90,6 +90,8 @@ export interface ApiToken {
   allowed_accounts: string;
   blocked_accounts: string;
   status: string;
+  concurrency: number;
+  expires_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -138,4 +140,6 @@ export const api = {
     request<OAuthExchangeResult>('POST', '/admin/oauth/exchange-code', { session_id: sessionId, code }),
   exchangeSetupTokenCode: (sessionId: string, code: string) =>
     request<OAuthExchangeResult>('POST', '/admin/oauth/exchange-setup-token-code', { session_id: sessionId, code }),
+  exchangeSessionKey: (sessionKey: string, proxyUrl?: string) =>
+    request<OAuthExchangeResult>('POST', '/admin/oauth/exchange-session-key', { session_key: sessionKey, proxy_url: proxyUrl || null }),
 }

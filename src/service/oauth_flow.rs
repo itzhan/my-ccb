@@ -28,6 +28,13 @@ const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 /// Setup-Token 有效期（1 年）。
 const SETUP_TOKEN_EXPIRES_IN: i64 = 365 * 24 * 60 * 60;
 
+/// claude.ai 网页 API 基址（session-key 自动授权用）。
+const CLAUDE_AI_BASE: &str = "https://claude.ai";
+
+/// 访问 claude.ai 时使用的浏览器 User-Agent。
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 // ---------------------------------------------------------------------------
 // PKCE 工具
 // ---------------------------------------------------------------------------
@@ -125,6 +132,28 @@ pub struct ExchangeCodeRequest {
     pub code: String,
 }
 
+/// session-key 自动授权请求（粘贴 claude.ai sessionKey 录号）。
+#[derive(Deserialize)]
+pub struct SessionKeyExchangeRequest {
+    pub session_key: String,
+    pub proxy_url: Option<String>,
+}
+
+/// claude.ai /api/organizations 返回项。
+#[derive(Deserialize)]
+struct OrgEntry {
+    uuid: String,
+    #[serde(default)]
+    raven_type: Option<String>,
+}
+
+/// claude.ai /v1/oauth/{org}/authorize 返回体。
+#[derive(Deserialize)]
+struct AuthorizeResponse {
+    #[serde(default)]
+    redirect_uri: String,
+}
+
 /// 交换 code 的响应。
 #[derive(Serialize)]
 pub struct ExchangeCodeResponse {
@@ -214,7 +243,146 @@ impl OAuthFlowService {
         self.do_exchange(&req.session_id, &req.code, true).await
     }
 
+    /// session-key 一步录号：粘贴 claude.ai sessionKey，自动完成 OAuth 授权并换取 token。
+    /// 移植自 sub2api：GetOrganizationUUID → GetAuthorizationCode → ExchangeCodeForToken。
+    pub async fn exchange_session_key(
+        &self,
+        req: &SessionKeyExchangeRequest,
+    ) -> Result<ExchangeCodeResponse, AppError> {
+        let session_key = req.session_key.trim();
+        if session_key.is_empty() {
+            return Err(AppError::BadRequest("session_key is required".into()));
+        }
+        let proxy_url = req.proxy_url.as_deref().unwrap_or("");
+
+        let state = generate_state();
+        let code_verifier = generate_code_verifier();
+        let code_challenge = generate_code_challenge(&code_verifier);
+
+        // Step 1: 用 sessionKey 拿组织 UUID
+        let org_uuid = self.get_organization_uuid(session_key, proxy_url).await?;
+        // Step 2: 用 sessionKey 在 claude.ai 上自动授权，拿 authorization code
+        let full_code = self
+            .get_authorization_code(session_key, &org_uuid, SCOPE_FULL, &code_challenge, &state, proxy_url)
+            .await?;
+        // Step 3: 用 code 换 token（完整 scope，非 setup-token）
+        self.exchange_core(&full_code, &code_verifier, &state, proxy_url, false)
+            .await
+    }
+
     // --- 内部实现 ---
+
+    /// Step 1：带 sessionKey cookie 请求 claude.ai 组织列表，优先返回 team 组织。
+    async fn get_organization_uuid(
+        &self,
+        session_key: &str,
+        proxy_url: &str,
+    ) -> Result<String, AppError> {
+        let client = crate::tlsfp::make_request_client(proxy_url);
+        let resp = client
+            .get(format!("{}/api/organizations", CLAUDE_AI_BASE))
+            .header("Cookie", format!("sessionKey={}", session_key))
+            .header("User-Agent", BROWSER_UA)
+            .header("Accept", "application/json")
+            .header("Referer", "https://claude.ai/")
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("get organizations request failed: {}", e)))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(AppError::BadRequest(format!(
+                "无法获取组织（sessionKey 可能无效或已过期）: status {} {}",
+                status,
+                truncate(&text, 256)
+            )));
+        }
+
+        let orgs: Vec<OrgEntry> = serde_json::from_str(&text).map_err(|_| {
+            AppError::BadRequest(
+                "无法解析组织列表（claude.ai 返回非 JSON，sessionKey 可能无效或已过期）".into(),
+            )
+        })?;
+        if orgs.is_empty() {
+            return Err(AppError::BadRequest("该 sessionKey 下没有任何组织".into()));
+        }
+        // 优先选择 team 组织
+        if let Some(team) = orgs
+            .iter()
+            .find(|o| o.raven_type.as_deref() == Some("team"))
+        {
+            return Ok(team.uuid.clone());
+        }
+        Ok(orgs[0].uuid.clone())
+    }
+
+    /// Step 2：带 sessionKey cookie POST claude.ai 授权端点，从返回的 redirect_uri 抠出 code。
+    async fn get_authorization_code(
+        &self,
+        session_key: &str,
+        org_uuid: &str,
+        scope: &str,
+        code_challenge: &str,
+        state: &str,
+        proxy_url: &str,
+    ) -> Result<String, AppError> {
+        let client = crate::tlsfp::make_request_client(proxy_url);
+        let url = format!("{}/v1/oauth/{}/authorize", CLAUDE_AI_BASE, org_uuid);
+        let body = serde_json::json!({
+            "response_type": "code",
+            "client_id": CLIENT_ID,
+            "organization_uuid": org_uuid,
+            "redirect_uri": REDIRECT_URI,
+            "scope": scope,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        });
+
+        let resp = client
+            .post(&url)
+            .header("Cookie", format!("sessionKey={}", session_key))
+            .header("User-Agent", BROWSER_UA)
+            .header("Accept", "application/json")
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Origin", "https://claude.ai")
+            .header("Referer", "https://claude.ai/new")
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("authorize request failed: {}", e)))?;
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(AppError::BadRequest(format!(
+                "自动授权失败: status {} {}",
+                status,
+                truncate(&text, 256)
+            )));
+        }
+
+        let parsed: AuthorizeResponse = serde_json::from_str(&text).map_err(|_| {
+            AppError::BadRequest(
+                "无法解析授权响应（claude.ai 返回非 JSON，sessionKey 可能无效或已过期）".into(),
+            )
+        })?;
+        if parsed.redirect_uri.is_empty() {
+            return Err(AppError::BadRequest("授权响应中没有 redirect_uri".into()));
+        }
+
+        let auth_code = extract_query_param(&parsed.redirect_uri, "code")
+            .ok_or_else(|| AppError::BadRequest("redirect_uri 中没有 code".into()))?;
+        let resp_state = extract_query_param(&parsed.redirect_uri, "state").unwrap_or_default();
+
+        Ok(if resp_state.is_empty() {
+            auth_code
+        } else {
+            format!("{}#{}", auth_code, resp_state)
+        })
+    }
 
     fn build_auth_url(&self, scope: &str, proxy_url: &str) -> GenerateAuthUrlResponse {
         let state = generate_state();
@@ -264,6 +432,25 @@ impl OAuthFlowService {
             return Err(AppError::BadRequest("session expired".into()));
         }
 
+        self.exchange_core(
+            raw_code,
+            &session.code_verifier,
+            &session.state,
+            &session.proxy_url,
+            is_setup_token,
+        )
+        .await
+    }
+
+    /// 用 authorization code 换 token（手动流程与 session-key 流程共用）。
+    async fn exchange_core(
+        &self,
+        raw_code: &str,
+        code_verifier: &str,
+        state_fallback: &str,
+        proxy_url: &str,
+        is_setup_token: bool,
+    ) -> Result<ExchangeCodeResponse, AppError> {
         // code 可能携带 state：code#state
         let (auth_code, code_state) = if let Some(idx) = raw_code.find('#') {
             (&raw_code[..idx], &raw_code[idx + 1..])
@@ -277,23 +464,23 @@ impl OAuthFlowService {
             "code": auth_code,
             "redirect_uri": REDIRECT_URI,
             "client_id": CLIENT_ID,
-            "code_verifier": session.code_verifier,
+            "code_verifier": code_verifier,
         });
 
         if !code_state.is_empty() {
             body["state"] = serde_json::Value::String(code_state.to_string());
-        } else {
-            body["state"] = serde_json::Value::String(session.state.clone());
+        } else if !state_fallback.is_empty() {
+            body["state"] = serde_json::Value::String(state_fallback.to_string());
         }
 
         if is_setup_token {
             body["expires_in"] = serde_json::json!(SETUP_TOKEN_EXPIRES_IN);
         }
 
-        debug!("exchanging code for session {}", session_id);
+        debug!("exchanging authorization code for token");
 
         // 发送 token exchange 请求
-        let client = crate::tlsfp::make_request_client(&session.proxy_url);
+        let client = crate::tlsfp::make_request_client(proxy_url);
         let resp = client
             .post(TOKEN_URL)
             .header("Content-Type", "application/json")
@@ -345,6 +532,57 @@ impl OAuthFlowService {
                 .map(|o| o.uuid.clone())
                 .unwrap_or_default(),
         })
+    }
+}
+
+/// 从 URL 的 query 中取出指定参数（值做 percent-decode）。
+fn extract_query_param(uri: &str, key: &str) -> Option<String> {
+    let query = uri.split_once('?').map(|(_, q)| q)?;
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return Some(percent_decode(v));
+            }
+        }
+    }
+    None
+}
+
+/// 简易 percent-decode（%XX 与 +→空格）。
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                if let Ok(b) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                    out.push(b);
+                    i += 3;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 截断字符串用于错误信息展示（按字符截断，避免切到多字节边界）。
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", s.chars().take(max).collect::<String>())
     }
 }
 

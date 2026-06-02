@@ -100,6 +100,15 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         }
         sqlx::query(stmt).execute(pool).await?;
     }
+    // api_tokens 增量迁移
+    sqlx::query("ALTER TABLE api_tokens ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE api_tokens ADD COLUMN expires_at TEXT")
+        .execute(pool)
+        .await
+        .ok();
     Ok(())
 }
 
@@ -169,6 +178,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     allowed_accounts    TEXT NOT NULL DEFAULT '',
     blocked_accounts    TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'active',
+    concurrency         INTEGER NOT NULL DEFAULT 0,
+    expires_at          TEXT,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 )
@@ -182,6 +193,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     allowed_accounts    TEXT NOT NULL DEFAULT '',
     blocked_accounts    TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'active',
+    concurrency         INTEGER NOT NULL DEFAULT 0,
+    expires_at          TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )

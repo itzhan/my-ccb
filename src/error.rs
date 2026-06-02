@@ -11,6 +11,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("too many requests: {0}")]
     TooManyRequests(String),
     #[error("bad gateway: {0}")]
@@ -36,6 +38,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found"),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, ""),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, ""),
             AppError::TooManyRequests(_) => (StatusCode::TOO_MANY_REQUESTS, ""),
             AppError::BadGateway(_) => (StatusCode::BAD_GATEWAY, ""),
             AppError::ServiceUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, ""),

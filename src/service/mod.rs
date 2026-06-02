@@ -1,4 +1,5 @@
 pub mod account;
+pub mod client_guard;
 pub mod gateway;
 pub mod oauth;
 pub mod oauth_flow;

@@ -11,6 +11,7 @@ use crate::error::AppError;
 use crate::model::account::{Account, AccountStatus};
 use crate::model::api_token::ApiToken;
 use crate::service::account::{AccountService, RateLimitClassification};
+use crate::service::client_guard::{self, ClientRestriction};
 use crate::service::rewriter::{
     clean_session_id_from_body, detect_client_type, ClientType, Rewriter,
 };
@@ -31,6 +32,7 @@ pub struct GatewayService {
     account_svc: Arc<AccountService>,
     rewriter: Arc<Rewriter>,
     telemetry_svc: Arc<TelemetryService>,
+    client_restriction: ClientRestriction,
 }
 
 impl GatewayService {
@@ -38,11 +40,13 @@ impl GatewayService {
         account_svc: Arc<AccountService>,
         rewriter: Arc<Rewriter>,
         telemetry_svc: Arc<TelemetryService>,
+        client_restriction: ClientRestriction,
     ) -> Self {
         Self {
             account_svc,
             rewriter,
             telemetry_svc,
+            client_restriction,
         }
     }
 
@@ -75,8 +79,41 @@ impl GatewayService {
             serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}))
         };
 
+        // 客户端限制：非真实 Claude Code 客户端直接拒绝
+        if !client_guard::validate(self.client_restriction, &path, &headers, &body_map) {
+            warn!("client restriction rejected request: ua=\"{}\" path={}", ua, path);
+            return Err(AppError::Forbidden("client not allowed".into()));
+        }
+
         // 检测客户端类型
         let client_type = detect_client_type(&ua, &body_map);
+
+        // per-token 并发槽位（整请求维度，函数结束时释放）
+        let _token_guard = match api_token {
+            Some(t) if t.concurrency > 0 => {
+                let acquired = self
+                    .account_svc
+                    .acquire_token_slot(t.id, t.concurrency)
+                    .await
+                    .map_err(|_| {
+                        AppError::TooManyRequests("token concurrency slot unavailable".into())
+                    })?;
+                if !acquired {
+                    return Err(AppError::TooManyRequests(
+                        "token concurrency limit reached".into(),
+                    ));
+                }
+                let svc = self.account_svc.clone();
+                let tid = t.id;
+                Some(scopeguard::guard((), move |_| {
+                    let svc = svc.clone();
+                    tokio::spawn(async move {
+                        svc.release_token_slot(tid).await;
+                    });
+                }))
+            }
+            _ => None,
+        };
 
         // 生成会话哈希
         let session_hash =

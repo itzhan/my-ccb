@@ -406,11 +406,12 @@ function setAuthType(authType: 'setup_token' | 'oauth') {
 
 // --- OAuth 授权流程 ---
 const showOAuthFlow = ref(false);
-const oauthMode = ref<'oauth' | 'setup_token'>('oauth');
+const oauthMode = ref<'oauth' | 'setup_token' | 'session_key'>('oauth');
 const oauthProxyUrl = ref('');
 const oauthSessionId = ref('');
 const oauthAuthUrl = ref('');
 const oauthCode = ref('');
+const oauthSessionKey = ref('');
 const oauthLoading = ref(false);
 const oauthResult = ref<OAuthExchangeResult | null>(null);
 const oauthStep = ref<'generate' | 'exchange' | 'done'>('generate');
@@ -422,10 +423,30 @@ function openOAuthFlow() {
   oauthSessionId.value = '';
   oauthAuthUrl.value = '';
   oauthCode.value = '';
+  oauthSessionKey.value = '';
   oauthResult.value = null;
   oauthStep.value = 'generate';
   oauthLoading.value = false;
   showOAuthFlow.value = true;
+}
+
+/** Session Key 一步录号：粘贴 claude.ai sessionKey，自动完成授权 */
+async function exchangeSessionKeyFlow() {
+  const key = oauthSessionKey.value.trim();
+  if (!key) {
+    toast('请粘贴 sessionKey');
+    return;
+  }
+  oauthLoading.value = true;
+  try {
+    const proxy = oauthProxyUrl.value.trim() || undefined;
+    const res = await api.exchangeSessionKey(key, proxy);
+    oauthResult.value = res;
+    oauthStep.value = 'done';
+  } catch (e: unknown) {
+    toast((e as Error).message || 'Session Key 授权失败');
+  }
+  oauthLoading.value = false;
 }
 
 /** 生成授权链接 */
@@ -1158,9 +1179,21 @@ async function copyText(text: string) {
                 >
                   Setup Token
                 </button>
+                <button
+                  type="button"
+                  @click="oauthMode = 'session_key'"
+                  class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all duration-200"
+                  :class="oauthMode === 'session_key'
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-600'
+                    : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-emerald-300'"
+                >
+                  Session Key
+                </button>
               </div>
               <p class="text-xs text-[#b5b0a6]">
-                {{ oauthMode === 'oauth' ? '完整 scope，支持 profile、用量查询等' : '仅 user:inference scope，有效期 1 年' }}
+                {{ oauthMode === 'oauth' ? '完整 scope，支持 profile、用量查询等'
+                  : oauthMode === 'setup_token' ? '仅 user:inference scope，有效期 1 年'
+                  : '粘贴 claude.ai 的 sessionKey（sk-ant-sid01-…），自动完成授权，无需浏览器' }}
               </p>
             </div>
             <div class="space-y-2">
@@ -1171,7 +1204,28 @@ async function copyText(text: string) {
                 class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
               />
             </div>
+            <!-- Session Key 一步录号 -->
+            <template v-if="oauthMode === 'session_key'">
+              <div class="space-y-2">
+                <Label class="text-[#5c5647] text-sm">Session Key <span class="text-red-500">*</span></Label>
+                <Textarea
+                  v-model="oauthSessionKey"
+                  :rows="2"
+                  placeholder="粘贴 claude.ai 的 sessionKey（sk-ant-sid01-…）"
+                  class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20 font-mono text-sm"
+                />
+                <p class="text-xs text-[#b5b0a6]">浏览器登录 claude.ai 后，从 Cookie 里复制 sessionKey 的值</p>
+              </div>
+              <Button
+                @click="exchangeSessionKeyFlow"
+                :disabled="oauthLoading || !oauthSessionKey.trim()"
+                class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-medium rounded-xl transition-all duration-200"
+              >
+                {{ oauthLoading ? '授权中...' : '授权并录号' }}
+              </Button>
+            </template>
             <Button
+              v-else
               @click="generateOAuthUrl"
               :disabled="oauthLoading"
               class="w-full bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-xl transition-all duration-200"

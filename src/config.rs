@@ -9,6 +9,8 @@ pub struct Config {
     pub admin: AdminConfig,
     pub log_level: String,
     pub usage_poll_interval: Duration,
+    /// 客户端限制级别：off / ua / strict（原始字符串，由 service::client_guard 解析）。
+    pub client_restriction: String,
 }
 
 #[derive(Clone)]
@@ -112,6 +114,7 @@ impl Config {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(300),
             ),
+            client_restriction: env::var("CLIENT_RESTRICTION").unwrap_or_else(|_| "off".into()),
         }
     }
 }

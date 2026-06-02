@@ -82,6 +82,7 @@ pub fn build_router(
         .route("/admin/oauth/generate-auth-url", post(oauth_generate_auth_url))
         .route("/admin/oauth/generate-setup-token-url", post(oauth_generate_setup_token_url))
         .route("/admin/oauth/exchange-code", post(oauth_exchange_code))
+        .route("/admin/oauth/exchange-session-key", post(oauth_exchange_session_key))
         .route("/admin/oauth/exchange-setup-token-code", post(oauth_exchange_setup_token_code))
         .layer(middleware::from_fn(move |req, next: Next| {
             let pwd = admin_password.clone();
@@ -444,6 +445,9 @@ struct CreateTokenRequest {
     name: Option<String>,
     allowed_accounts: Option<String>,
     blocked_accounts: Option<String>,
+    concurrency: Option<i32>,
+    /// RFC3339 时间字符串，留空表示永不过期。
+    expires_at: Option<String>,
 }
 
 async fn create_token(
@@ -457,11 +461,21 @@ async fn create_token(
         allowed_accounts: req.allowed_accounts.unwrap_or_default(),
         blocked_accounts: req.blocked_accounts.unwrap_or_default(),
         status: api_token::ApiTokenStatus::Active,
+        concurrency: req.concurrency.unwrap_or(0).max(0),
+        expires_at: parse_expires_at(req.expires_at.as_deref()),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
     state.token_store.create(&mut token).await?;
     Ok((StatusCode::CREATED, Json(token)))
+}
+
+/// 解析 RFC3339 过期时间，空串/None/解析失败均视为不过期。
+fn parse_expires_at(s: Option<&str>) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.map(str::trim).filter(|s| !s.is_empty())?;
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 async fn update_token(
@@ -484,6 +498,17 @@ async fn update_token(
         if !status.is_empty() {
             existing.status = status.to_string().into();
         }
+    }
+    if let Some(concurrency) = updates.get("concurrency").and_then(|v| v.as_i64()) {
+        existing.concurrency = (concurrency as i32).max(0);
+    }
+    // expires_at: 传 null 或空串清除过期，传 RFC3339 字符串设置过期
+    if let Some(v) = updates.get("expires_at") {
+        existing.expires_at = match v {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) => parse_expires_at(Some(s)),
+            _ => existing.expires_at,
+        };
     }
 
     state.token_store.update(&existing).await?;
@@ -549,6 +574,15 @@ async fn oauth_exchange_code(
     Json(req): Json<crate::service::oauth_flow::ExchangeCodeRequest>,
 ) -> Result<Json<crate::service::oauth_flow::ExchangeCodeResponse>, AppError> {
     let resp = state.oauth_flow_svc.exchange_code(&req).await?;
+    Ok(Json(resp))
+}
+
+/// 粘贴 claude.ai sessionKey 一步录号（自动完成 OAuth 授权换 token）。
+async fn oauth_exchange_session_key(
+    State(state): State<AppState>,
+    Json(req): Json<crate::service::oauth_flow::SessionKeyExchangeRequest>,
+) -> Result<Json<crate::service::oauth_flow::ExchangeCodeResponse>, AppError> {
+    let resp = state.oauth_flow_svc.exchange_session_key(&req).await?;
     Ok(Json(resp))
 }
 
