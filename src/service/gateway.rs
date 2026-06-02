@@ -338,36 +338,57 @@ impl GatewayService {
     ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response), AppError> {
         let upstream_base =
             std::env::var("UPSTREAM_BASE").unwrap_or_else(|_| UPSTREAM_BASE.to_string());
-        let mut target_url = format!("{}{}", upstream_base, path);
-        if !query.is_empty() {
-            let q = if query.contains("beta=true") {
-                query.to_string()
-            } else {
-                format!("{}&beta=true", query)
-            };
-            target_url = format!("{}?{}", target_url, q);
+        // path + query(确保带 beta=true)
+        let qbeta = if query.is_empty() {
+            "beta=true".to_string()
+        } else if query.contains("beta=true") {
+            query.to_string()
         } else {
-            target_url = format!("{}?beta=true", target_url);
-        }
+            format!("{}&beta=true", query)
+        };
+        let path_query = format!("{}?{}", path, qbeta);
 
-        debug!("upstream URL: {}", target_url);
+        // 出口模式：bun_sidecar = 经本地 Bun 边车发出（真实 BoringSSL/Bun 指纹，随版本自动跟随）；
+        // 否则用 craftls 直连（内置 Bun 指纹快照）。
+        let use_sidecar =
+            std::env::var("EGRESS_MODE").map(|v| v == "bun_sidecar").unwrap_or(false);
 
-        let client = crate::tlsfp::make_request_client(&account.proxy_url);
+        let (client, request_url) = if use_sidecar {
+            let port = std::env::var("BUN_SIDECAR_PORT").unwrap_or_else(|_| "8788".into());
+            let c = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(300))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            (c, format!("http://127.0.0.1:{}{}", port, path_query))
+        } else {
+            (
+                crate::tlsfp::make_request_client(&account.proxy_url),
+                format!("{}{}", upstream_base, path_query),
+            )
+        };
+
+        debug!("egress URL: {} (sidecar={})", request_url, use_sidecar);
 
         let mut req_builder = match method {
-            "GET" => client.get(&target_url),
-            "POST" => client.post(&target_url),
-            "PUT" => client.put(&target_url),
-            "DELETE" => client.delete(&target_url),
-            "PATCH" => client.patch(&target_url),
-            _ => client.post(&target_url),
+            "GET" => client.get(&request_url),
+            "POST" => client.post(&request_url),
+            "PUT" => client.put(&request_url),
+            "DELETE" => client.delete(&request_url),
+            "PATCH" => client.patch(&request_url),
+            _ => client.post(&request_url),
         };
 
         for (k, v) in headers {
-            debug!("upstream header: {}: {}", k, v);
             req_builder = req_builder.header(k, v);
         }
-        req_builder = req_builder.header("Host", "api.anthropic.com");
+        if use_sidecar {
+            // 控制头：告诉边车真正的上游与账号代理
+            req_builder = req_builder.header("x-ccb-upstream", &upstream_base);
+            req_builder = req_builder.header("x-ccb-proxy", &account.proxy_url);
+        } else {
+            req_builder = req_builder.header("Host", "api.anthropic.com");
+        }
         req_builder = req_builder.body(body.to_vec());
 
         let resp = req_builder

@@ -39,12 +39,27 @@ RUN case "$TARGETPLATFORM" in \
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+# Bun 版本：与 Claude Code 当前打包的 Bun 对齐（CC 升级 bun 时改这一行即可）
+ARG BUN_VERSION=1.3.14
+RUN apt-get update && apt-get install -y ca-certificates curl unzip libstdc++6 && \
+    curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun.zip && \
+    unzip -q /tmp/bun.zip -d /tmp/bun && \
+    mv /tmp/bun/bun-linux-x64/bun /usr/local/bin/bun && chmod +x /usr/local/bin/bun && \
+    rm -rf /tmp/bun.zip /tmp/bun && \
+    apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* && \
+    bun --version
 WORKDIR /app
 
 COPY --from=backend /app/claude-code-gateway-bin ./claude-code-gateway
 COPY --from=frontend /app/web/dist ./web/dist/
+COPY sidecar/ ./sidecar/
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# 默认走 Bun 边车出口（真实 BoringSSL 指纹）
+ENV EGRESS_MODE=bun_sidecar
+ENV BUN_SIDECAR_PORT=8788
 
 RUN mkdir -p data
 EXPOSE 5674
-CMD ["./claude-code-gateway"]
+CMD ["/usr/local/bin/entrypoint.sh"]
