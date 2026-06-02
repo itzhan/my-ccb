@@ -59,34 +59,18 @@ pub enum ClientType {
     API,
 }
 
-const DEFAULT_VERSION: &str = "2.1.81";
-
-/// 合并必需的 beta 令牌与客户端传入的 beta 令牌。
-fn merge_anthropic_beta(required: &str, incoming: &str) -> String {
-    let mut seen = std::collections::HashSet::new();
-    let mut tokens = Vec::new();
-    for t in required.split(',') {
-        let t = t.trim();
-        if !t.is_empty() && seen.insert(t.to_string()) {
-            tokens.push(t.to_string());
-        }
-    }
-    for t in incoming.split(',') {
-        let t = t.trim();
-        if !t.is_empty() && seen.insert(t.to_string()) {
-            tokens.push(t.to_string());
-        }
-    }
-    tokens.join(",")
-}
+const DEFAULT_VERSION: &str = "2.1.156";
 
 /// 根据模型返回正确的 anthropic-beta 值。
 fn beta_header_for_model(model_id: &str) -> &'static str {
+    // 取自真实 Claude Code 2.1.156 抓包（POST /v1/messages?beta=true）。
+    // 注意：真实 CC 不发送 oauth-2025-04-20。
     let lower = model_id.to_lowercase();
     if lower.contains("haiku") {
-        "oauth-2025-04-20,interleaved-thinking-2025-05-14"
+        // haiku 辅助请求用较小集合（不含 1M 上下文等重特性）
+        "claude-code-20250219,interleaved-thinking-2025-05-14"
     } else {
-        "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
+        "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
     }
 }
 
@@ -123,7 +107,7 @@ impl Rewriter {
             out.insert("Accept".into(), "application/json".into());
             out.insert(
                 "User-Agent".into(),
-                format!("claude-code/{} (external, cli)", version),
+                format!("claude-cli/{} (external, sdk-cli)", version),
             );
             out.insert(
                 "anthropic-beta".into(),
@@ -142,7 +126,7 @@ impl Rewriter {
             );
             let stainless_os = stainless_os_from_platform(&env.platform);
             out.insert("X-Stainless-Lang".into(), "js".into());
-            out.insert("X-Stainless-Package-Version".into(), "0.70.0".into());
+            out.insert("X-Stainless-Package-Version".into(), "0.94.0".into());
             out.insert("X-Stainless-OS".into(), stainless_os.into());
             out.insert("X-Stainless-Arch".into(), env.arch.clone());
             out.insert("X-Stainless-Runtime".into(), "node".into());
@@ -184,48 +168,20 @@ impl Rewriter {
             .into_iter()
             .collect();
 
-            let stainless_os = stainless_os_from_platform(&env.platform);
             for (k, v) in headers {
                 let lower = k.to_lowercase();
                 if !allowed.contains(lower.as_str()) {
                     continue;
                 }
-                let wire_key = resolve_wire_casing(k);
-                match lower.as_str() {
-                    "user-agent" => {
-                        out.insert(
-                            wire_key,
-                            format!("claude-code/{} (external, cli)", version),
-                        );
-                    }
-                    "x-stainless-os" => {
-                        out.insert(wire_key, stainless_os.to_string());
-                    }
-                    "x-stainless-arch" => {
-                        out.insert(wire_key, env.arch.clone());
-                    }
-                    "x-stainless-runtime-version" => {
-                        out.insert(wire_key, env.node_version.clone());
-                    }
-                    _ => {
-                        out.insert(wire_key, v.clone());
-                    }
-                }
+                // 真实 Claude Code 客户端发来的 header 本就正确（UA / anthropic-beta /
+                // X-Stainless-* 都是当前版本的真实值），原样转发，不再用账号预设覆盖，
+                // 避免改写引入与真实客户端的偏差（这正是被风控识别的根源）。
+                out.insert(resolve_wire_casing(k), v.clone());
             }
 
-            // 确保必需 header 存在
+            // 仅兜底：确保必需 header 存在（真实 CC 一般已携带）
             out.entry("anthropic-dangerous-direct-browser-access".into())
                 .or_insert_with(|| "true".into());
-
-            // 合并客户端 beta 与必需 beta
-            let existing_beta = out
-                .get("anthropic-beta")
-                .cloned()
-                .unwrap_or_default();
-            out.insert(
-                "anthropic-beta".into(),
-                merge_anthropic_beta(beta_header_for_model(model_id), &existing_beta),
-            );
         }
 
         out
@@ -1070,6 +1026,28 @@ pub fn extract_session_id_from_body(body: &serde_json::Value) -> Option<String> 
         .and_then(|m| m.get("_session_id"))
         .and_then(|s| s.as_str())
         .map(|s| s.to_string())
+}
+
+/// 纯透传请求头：去掉客户端的 auth 与 hop-by-hop 头并恢复线缆大小写，其余原样保留。
+/// 用于真实客户端的透传模式——请求不做任何改写，账号 token 由调用方注入。
+pub fn passthrough_headers(headers: &HashMap<String, String>) -> HashMap<String, String> {
+    let drop: std::collections::HashSet<&str> = [
+        "authorization",   // 客户端发的是网关令牌，丢弃，改注入账号 token
+        "x-api-key",       // 同上
+        "host",            // 由上游 URL 决定
+        "content-length",  // 由上游客户端按 body 重新计算
+        "connection",      // hop-by-hop
+    ]
+    .into_iter()
+    .collect();
+    let mut out = HashMap::new();
+    for (k, v) in headers {
+        if drop.contains(k.to_lowercase().as_str()) {
+            continue;
+        }
+        out.insert(resolve_wire_casing(k), v.clone());
+    }
+    out
 }
 
 /// 清理 body 中的内部 _session_id 标记。

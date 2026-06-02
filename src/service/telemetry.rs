@@ -244,8 +244,8 @@ async fn session_ua(store: &Arc<AccountStore>, account_id: i64) -> String {
             serde_json::from_value::<CanonicalEnvData>(a.canonical_env).ok()
         })
         .map(|e| e.version)
-        .unwrap_or_else(|| "2.1.81".into());
-    format!("claude-code/{} (external, cli)", version)
+        .unwrap_or_else(|| "2.1.156".into());
+    format!("claude-cli/{} (external, sdk-cli)", version)
 }
 
 // ---------------------------------------------------------------------------

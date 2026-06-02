@@ -13,7 +13,7 @@ use crate::model::api_token::ApiToken;
 use crate::service::account::{AccountService, RateLimitClassification};
 use crate::service::client_guard::{self, ClientRestriction};
 use crate::service::rewriter::{
-    clean_session_id_from_body, detect_client_type, ClientType, Rewriter,
+    clean_session_id_from_body, detect_client_type, passthrough_headers, ClientType, Rewriter,
 };
 use crate::service::telemetry::TelemetryService;
 
@@ -214,46 +214,36 @@ impl GatewayService {
                 });
             });
 
-            // 改写请求体
-            debug!(
-                "request body BEFORE rewrite: {}",
-                truncate_body(&body_bytes, 4096)
-            );
-            let rewritten_body =
-                self.rewriter
-                    .rewrite_body(&body_bytes, &path, &account, client_type);
-            debug!(
-                "request body AFTER rewrite: {}",
-                truncate_body(&rewritten_body, 4096)
-            );
-
-            // 重新解析改写后的 body
-            let mut rewritten_body_map: serde_json::Value =
-                serde_json::from_slice(&rewritten_body).unwrap_or(serde_json::json!({}));
-
-            // 改写 header
-            let model_id = body_map
-                .get("model")
-                .and_then(|m| m.as_str())
-                .unwrap_or("");
-            let rewritten_headers = self.rewriter.rewrite_headers(
-                &headers,
-                &account,
-                client_type,
-                model_id,
-                &rewritten_body_map,
-            );
-
-            // 清理 body 中的 _session_id 标记并重新序列化
-            let final_body = if client_type == ClientType::API {
-                clean_session_id_from_body(&mut rewritten_body_map);
-                serde_json::to_vec(&rewritten_body_map).unwrap_or_else(|_| rewritten_body.clone())
+            // 构建转发请求
+            let (final_body, mut final_headers) = if client_type == ClientType::ClaudeCode {
+                // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，
+                // 仅注入账号 token。客户端之间版本/字段差异不会因改写而露馅。
+                (body_bytes.to_vec(), passthrough_headers(&headers))
             } else {
-                rewritten_body.clone()
+                // 非 CC 客户端（API 注入模式）：保留原有"伪装成 CC"的改写
+                debug!(
+                    "request body BEFORE rewrite: {}",
+                    truncate_body(&body_bytes, 4096)
+                );
+                let rewritten_body =
+                    self.rewriter
+                        .rewrite_body(&body_bytes, &path, &account, client_type);
+                let mut rewritten_body_map: serde_json::Value =
+                    serde_json::from_slice(&rewritten_body).unwrap_or(serde_json::json!({}));
+                let model_id = body_map.get("model").and_then(|m| m.as_str()).unwrap_or("");
+                let rewritten_headers = self.rewriter.rewrite_headers(
+                    &headers,
+                    &account,
+                    client_type,
+                    model_id,
+                    &rewritten_body_map,
+                );
+                clean_session_id_from_body(&mut rewritten_body_map);
+                let fb = serde_json::to_vec(&rewritten_body_map).unwrap_or(rewritten_body);
+                (fb, rewritten_headers)
             };
 
             let upstream_token = self.account_svc.resolve_upstream_token(account.id).await?;
-            let mut final_headers = rewritten_headers;
             final_headers.insert(
                 "authorization".into(),
                 format!("Bearer {}", upstream_token),
@@ -346,7 +336,9 @@ impl GatewayService {
         body: &[u8],
         account: &Account,
     ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response), AppError> {
-        let mut target_url = format!("{}{}", UPSTREAM_BASE, path);
+        let upstream_base =
+            std::env::var("UPSTREAM_BASE").unwrap_or_else(|_| UPSTREAM_BASE.to_string());
+        let mut target_url = format!("{}{}", upstream_base, path);
         if !query.is_empty() {
             let q = if query.contains("beta=true") {
                 query.to_string()
