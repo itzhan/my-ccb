@@ -60,6 +60,8 @@ pub enum ClientType {
 }
 
 const DEFAULT_VERSION: &str = "2.1.156";
+/// 与 DEFAULT_VERSION 对应的 Anthropic SDK 版本（x-stainless-package-version）。
+const STAINLESS_PACKAGE_VERSION: &str = "0.94.0";
 
 /// 根据模型返回正确的 anthropic-beta 值。
 fn beta_header_for_model(model_id: &str) -> &'static str {
@@ -421,7 +423,10 @@ impl Rewriter {
 
     /// normalize 模式下把 X-Stainless-OS/Arch 统一成账号的虚拟机器（与系统提示里的
     /// Platform/OS 保持一致），在原位替换值、保留顺序。Runtime-Version 是 Bun 模拟的
-    /// node 版本，所有真实 CC 都一样，保持客户端透传真值，不按预设覆盖。
+    /// normalize 模式下把机器级身份(OS/Arch)+ CC 版本(UA / package-version /
+    /// runtime-version)统一成账号固定值。多人共号时,若只统一 device 却放任 15 个
+    /// 不同 CC 版本透传,Anthropic 会看到"一台机器同时跑 15 个版本"——这是不可能的,
+    /// 等于自报共号。把版本也钉死,一个号只呈现"一台机器+一个版本+多会话"=合法单人多 agent。
     pub fn normalize_os_headers_ordered(
         &self,
         headers: &mut [(String, String)],
@@ -429,10 +434,24 @@ impl Rewriter {
     ) {
         let env = self.parse_env(account);
         let os = stainless_os_from_platform(&env.platform);
+        let version = if env.version.is_empty() {
+            DEFAULT_VERSION
+        } else {
+            env.version.as_str()
+        };
+        let ua = format!("claude-cli/{} (external, cli)", version);
+        let runtime_ver = if env.node_version.is_empty() {
+            "v24.3.0"
+        } else {
+            env.node_version.as_str()
+        };
         for (k, v) in headers.iter_mut() {
             match k.to_ascii_lowercase().as_str() {
                 "x-stainless-os" => *v = os.to_string(),
                 "x-stainless-arch" => *v = env.arch.clone(),
+                "user-agent" => *v = ua.clone(),
+                "x-stainless-package-version" => *v = STAINLESS_PACKAGE_VERSION.to_string(),
+                "x-stainless-runtime-version" => *v = runtime_ver.to_string(),
                 _ => {}
             }
         }
