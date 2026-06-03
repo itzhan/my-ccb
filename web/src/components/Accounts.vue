@@ -52,6 +52,7 @@ const form = ref({
   virtual_user: '',
   virtual_git_name: '',
   recapture_days: 0,
+  max_sessions: 3,
 });
 /** 正在测试的账号 ID */
 const testing = ref<number | null>(null);
@@ -133,6 +134,7 @@ function openCreate() {
     virtual_user: '',
     virtual_git_name: '',
     recapture_days: 0,
+    max_sessions: 3,
   };
   showForm.value = true;
 }
@@ -164,6 +166,7 @@ function openEdit(a: Account) {
     virtual_user: a.virtual_user || '',
     virtual_git_name: a.virtual_git_name || '',
     recapture_days: a.recapture_days ?? 0,
+    max_sessions: a.max_sessions ?? 3,
   };
   showForm.value = true;
 }
@@ -204,6 +207,7 @@ async function save() {
       updates.virtual_user = form.value.virtual_user;
       updates.virtual_git_name = form.value.virtual_git_name;
       updates.recapture_days = Number(form.value.recapture_days) || 0;
+      updates.max_sessions = Math.max(0, Number(form.value.max_sessions) || 0);
       await api.updateAccount(editing.value.id, updates);
     } else {
       if (form.value.auth_type === 'setup_token' && !form.value.setup_token.trim()) {
@@ -232,6 +236,7 @@ async function save() {
         virtual_user: form.value.virtual_user,
         virtual_git_name: form.value.virtual_git_name,
         recapture_days: Number(form.value.recapture_days) || 0,
+        max_sessions: Math.max(0, Number(form.value.max_sessions) || 0),
       };
       if (expiresAt) payload.expires_at = Number(expiresAt);
       await api.createAccount(payload);
@@ -492,6 +497,7 @@ function applyOAuthResult() {
     virtual_user: '',
     virtual_git_name: '',
     recapture_days: 0,
+    max_sessions: 3,
   };
   showForm.value = true;
 }
@@ -583,11 +589,17 @@ async function copyText(text: string) {
 
           <!-- 信息 -->
           <div class="pt-2 border-t border-[#f0ebe4] space-y-2">
-            <div class="grid grid-cols-3 gap-3">
+            <div class="grid grid-cols-4 gap-3">
               <div class="text-center">
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">并发(实时)</p>
                 <p class="text-sm font-medium" :class="(a.current_concurrency || 0) >= a.concurrency ? 'text-red-500' : (a.current_concurrency || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
                   {{ a.current_concurrency || 0 }} / {{ a.concurrency }}
+                </p>
+              </div>
+              <div class="text-center">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">会话(实时)</p>
+                <p class="text-sm font-medium" :class="a.max_sessions && (a.current_sessions || 0) >= a.max_sessions ? 'text-red-500' : (a.current_sessions || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
+                  {{ a.current_sessions || 0 }} / {{ a.max_sessions || '∞' }}
                 </p>
               </div>
               <div class="text-center">
@@ -1031,6 +1043,15 @@ async function copyText(text: string) {
                 v-model.number="form.concurrency"
                 type="number"
                 min="1"
+                class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+              />
+            </div>
+            <div class="flex-1 space-y-2">
+              <Label class="text-[#5c5647] text-sm">最大并发会话(0=不限)</Label>
+              <Input
+                v-model.number="form.max_sessions"
+                type="number"
+                min="0"
                 class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
               />
             </div>

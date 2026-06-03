@@ -236,9 +236,13 @@ impl GatewayService {
             _ => None,
         };
 
-        // 生成会话哈希
-        let session_hash =
-            crate::service::account::generate_session_hash(&ua, &body_map, client_type);
+        // 生成会话哈希:CC 客户端优先用 x-claude-code-session-id(权威会话标识,且与并发会话限制对齐);
+        // 否则回退到内容哈希。这样一条会话稳定粘在一个号,不同会话彼此独立。
+        let session_hash = if client_type == ClientType::ClaudeCode && !log_session_id.is_empty() {
+            format!("ccsid:{}", log_session_id)
+        } else {
+            crate::service::account::generate_session_hash(&ua, &body_map, client_type)
+        };
 
         // 根据令牌限制构建账号过滤条件
         let (allowed_ids, blocked_ids) = if let Some(t) = api_token {
@@ -246,6 +250,20 @@ impl GatewayService {
         } else {
             (vec![], vec![])
         };
+
+        // 并发会话限制:为该 x-claude-code-session-id 占一个有会话容量的号(满则排队等待),
+        // 避免"一个号同时挂太多独立会话"被 Anthropic 判定共号。
+        if client_type == ClientType::ClaudeCode
+            && !self
+                .account_svc
+                .admit_session(&log_session_id, &session_hash, &allowed_ids, &blocked_ids)
+                .await
+        {
+            warn!("session capacity full for session {}", log_session_id);
+            return Err(AppError::TooManyRequests(
+                "all accounts at session capacity, please retry".into(),
+            ));
+        }
 
         // 429 自动换号重试循环（带延迟、上限、分类决策）
         let mut exclude_ids = blocked_ids.clone();

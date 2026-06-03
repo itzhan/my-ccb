@@ -25,6 +25,8 @@ pub struct MemoryStore {
     slots: Mutex<HashMap<String, i64>>,
     locks: Mutex<HashMap<String, LockEntry>>,
     counters: Mutex<HashMap<String, CounterEntry>>,
+    /// account_id -> (session_id -> 最后活动时间)
+    acct_sessions: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
 }
 
 impl MemoryStore {
@@ -34,6 +36,7 @@ impl MemoryStore {
             slots: Mutex::new(HashMap::new()),
             locks: Mutex::new(HashMap::new()),
             counters: Mutex::new(HashMap::new()),
+            acct_sessions: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -100,6 +103,39 @@ impl CacheStore for MemoryStore {
     async fn get_slot_count(&self, key: &str) -> i64 {
         let slots = self.slots.lock().await;
         slots.get(key).copied().unwrap_or(0).max(0)
+    }
+
+    async fn session_admit(
+        &self,
+        account_id: i64,
+        session_id: &str,
+        max: i32,
+        ttl: Duration,
+        force: bool,
+    ) -> bool {
+        let now = tokio::time::Instant::now();
+        let mut map = self.acct_sessions.lock().await;
+        let set = map.entry(account_id).or_default();
+        // 清理过期会话
+        set.retain(|_, last| now.duration_since(*last) < ttl);
+        if force || max <= 0 || set.contains_key(session_id) || (set.len() as i32) < max {
+            set.insert(session_id.to_string(), now);
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn session_count(&self, account_id: i64, ttl: Duration) -> i64 {
+        let now = tokio::time::Instant::now();
+        let map = self.acct_sessions.lock().await;
+        match map.get(&account_id) {
+            Some(set) => set
+                .values()
+                .filter(|last| now.duration_since(**last) < ttl)
+                .count() as i64,
+            None => 0,
+        }
     }
 
     async fn acquire_lock(

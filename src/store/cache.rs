@@ -16,6 +16,21 @@ pub trait CacheStore: Send + Sync {
     async fn release_slot(&self, key: &str);
     /// 读取当前并发槽位占用数（实时并发展示用）。
     async fn get_slot_count(&self, key: &str) -> i64;
+
+    /// 尝试把一个会话(x-claude-code-session-id)登记到账号的活跃会话集合。
+    /// force=true(已粘性绑定的老会话)或 max<=0(不限)时总是成功;否则:已存在→刷新成功,
+    /// 未满(< max)→登记成功,已满→false。ttl 内无新请求的会话视为过期、自动腾位。
+    async fn session_admit(
+        &self,
+        account_id: i64,
+        session_id: &str,
+        max: i32,
+        ttl: Duration,
+        force: bool,
+    ) -> bool;
+
+    /// 账号当前活跃会话数(ttl 内有请求的不同 session_id 数)。
+    async fn session_count(&self, account_id: i64, ttl: Duration) -> i64;
     async fn acquire_lock(
         &self,
         key: &str,

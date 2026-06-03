@@ -15,6 +15,11 @@ use crate::store::cache::CacheStore;
 
 const STICKY_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OAUTH_REFRESH_BUFFER_SECONDS: i64 = 5 * 60;
+/// 会话空闲多久视为结束、自动腾出并发会话名额。
+const SESSION_TTL: Duration = Duration::from_secs(180);
+/// 所有号都满时,新会话排队的重试间隔与最大次数(约 20s)。
+const SESSION_WAIT_RETRY: Duration = Duration::from_millis(500);
+const SESSION_WAIT_ATTEMPTS: usize = 40;
 const OAUTH_LOCK_TTL: Duration = Duration::from_secs(30);
 const OAUTH_WAIT_RETRY: Duration = Duration::from_millis(500);
 const OAUTH_WAIT_ATTEMPTS: usize = 20;
@@ -179,6 +184,76 @@ impl AccountService {
     pub async fn get_slot_count(&self, account_id: i64) -> i64 {
         let key = format!("concurrency:account:{}", account_id);
         self.cache.get_slot_count(&key).await
+    }
+
+    /// 账号当前活跃会话数(实时展示用)。
+    pub async fn session_count(&self, account_id: i64) -> i64 {
+        self.cache.session_count(account_id, SESSION_TTL).await
+    }
+
+    /// 并发会话准入(满则排队等待)。返回 true=已为该会话占到/确认一个账号;false=超时仍满。
+    /// 已粘性绑定的老会话始终放行;新会话只进有容量的号;全满则等待直到有名额或超时。
+    pub async fn admit_session(
+        &self,
+        session_id: &str,
+        session_hash: &str,
+        allowed_ids: &[i64],
+        blocked_ids: &[i64],
+    ) -> bool {
+        if session_id.is_empty() {
+            return true; // 无 session id(如 count_tokens)不限制
+        }
+        for _ in 0..SESSION_WAIT_ATTEMPTS {
+            // 1) 已粘性绑定的老会话:始终放行(force),刷新活跃时间
+            if !session_hash.is_empty() {
+                if let Ok(Some(aid)) = self.cache.get_session_account_id(session_hash).await {
+                    if aid > 0 {
+                        if let Ok(acc) = self.store.get_by_id(aid).await {
+                            let id_allowed =
+                                allowed_ids.is_empty() || allowed_ids.contains(&aid);
+                            if acc.is_schedulable()
+                                && !blocked_ids.contains(&aid)
+                                && id_allowed
+                            {
+                                self.cache
+                                    .session_admit(aid, session_id, acc.max_sessions, SESSION_TTL, true)
+                                    .await;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            // 2) 新会话:按优先级找一个有会话容量的号,占位 + 绑定粘性
+            if let Ok(accounts) = self.store.list_schedulable().await {
+                let mut cands: Vec<Account> = accounts
+                    .into_iter()
+                    .filter(|a| {
+                        !blocked_ids.contains(&a.id)
+                            && (allowed_ids.is_empty() || allowed_ids.contains(&a.id))
+                    })
+                    .collect();
+                cands.sort_by(|a, b| b.priority.cmp(&a.priority));
+                for acc in &cands {
+                    if self
+                        .cache
+                        .session_admit(acc.id, session_id, acc.max_sessions, SESSION_TTL, false)
+                        .await
+                    {
+                        if !session_hash.is_empty() {
+                            let _ = self
+                                .cache
+                                .set_session_account_id(session_hash, acc.id, STICKY_SESSION_TTL)
+                                .await;
+                        }
+                        return true;
+                    }
+                }
+            }
+            // 3) 全满 → 排队等待
+            sleep(SESSION_WAIT_RETRY).await;
+        }
+        false
     }
 
     /// 持久化从客户端吸取的版本坐标(CC 版本/package/runtime)到账号 canonical_env。

@@ -59,6 +59,8 @@ export interface Account {
   rpm_limit?: number | null
   current_rpm?: number | null
   current_concurrency?: number
+  max_sessions?: number
+  current_sessions?: number
   usage_data?: UsageData
   usage_fetched_at?: string
   identity_mode?: string

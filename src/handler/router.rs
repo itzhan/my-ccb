@@ -175,8 +175,9 @@ async fn list_accounts(
         if a.rpm_limit.map(|v| v > 0).unwrap_or(false) {
             obj["current_rpm"] = serde_json::json!(rpm_counts.get(&a.id).copied().unwrap_or(0));
         }
-        // 实时并发占用数
+        // 实时并发占用数 + 活跃会话数
         obj["current_concurrency"] = serde_json::json!(state.account_svc.get_slot_count(a.id).await);
+        obj["current_sessions"] = serde_json::json!(state.account_svc.session_count(a.id).await);
         // 该账号当前呈现的虚拟身份（自定义优先，留空则派生）+ 机器指纹，供详情展示
         let (vuser, vgit) = a.effective_virtual_identity();
         let env: crate::model::account::CanonicalEnvData =
@@ -223,6 +224,7 @@ struct CreateAccountRequest {
     virtual_user: Option<String>,
     virtual_git_name: Option<String>,
     recapture_days: Option<i64>,
+    max_sessions: Option<i32>,
 }
 
 async fn create_account(
@@ -276,6 +278,7 @@ async fn create_account(
         virtual_git_name: req.virtual_git_name.unwrap_or_default(),
         identity_captured_at: None,
         recapture_days: req.recapture_days.unwrap_or(0),
+        max_sessions: req.max_sessions.unwrap_or(3),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -357,6 +360,9 @@ async fn update_account(
     }
     if let Some(v) = updates.get("recapture_days").and_then(|v| v.as_i64()) {
         existing.recapture_days = v.max(0);
+    }
+    if let Some(v) = updates.get("max_sessions").and_then(|v| v.as_i64()) {
+        existing.max_sessions = v.max(0) as i32;
     }
     if let Some(status) = updates.get("status").and_then(|v| v.as_str()) {
         if !status.is_empty() {

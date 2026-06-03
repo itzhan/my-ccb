@@ -208,12 +208,16 @@ pub struct Account {
     /// 重新吸取版本坐标的周期(天)；0=永久(只吸一次)。
     #[serde(default)]
     pub recapture_days: i64,
+    /// 该账号允许的最大并发会话数(不同 x-claude-code-session-id)；0=不限。
+    #[serde(default = "default_max_sessions")]
+    pub max_sessions: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 fn default_concurrency() -> i32 { 3 }
 fn default_priority() -> i32 { 50 }
+fn default_max_sessions() -> i32 { 3 }
 
 impl Account {
     /// 是否启用 normalize 身份归一化。

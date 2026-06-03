@@ -110,6 +110,57 @@ impl CacheStore for RedisStore {
         v.unwrap_or(0).max(0)
     }
 
+    async fn session_admit(
+        &self,
+        account_id: i64,
+        session_id: &str,
+        max: i32,
+        ttl: Duration,
+        force: bool,
+    ) -> bool {
+        let key = format!("sessions:account:{}", account_id);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let cutoff = now_ms - ttl.as_millis() as i64;
+        let mut conn = self.client.clone();
+        let _: Result<i64, _> = redis::cmd("ZREMRANGEBYSCORE")
+            .arg(&key).arg("-inf").arg(cutoff)
+            .query_async(&mut conn).await;
+        let exists: Option<f64> = redis::cmd("ZSCORE")
+            .arg(&key).arg(session_id)
+            .query_async(&mut conn).await.unwrap_or(None);
+        let count: i64 = redis::cmd("ZCARD").arg(&key)
+            .query_async(&mut conn).await.unwrap_or(0);
+        if force || max <= 0 || exists.is_some() || (count as i32) < max {
+            let _: Result<i64, _> = redis::cmd("ZADD")
+                .arg(&key).arg(now_ms).arg(session_id)
+                .query_async(&mut conn).await;
+            let _: Result<i64, _> = redis::cmd("EXPIRE")
+                .arg(&key).arg(ttl.as_secs() as i64 + 60)
+                .query_async(&mut conn).await;
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn session_count(&self, account_id: i64, ttl: Duration) -> i64 {
+        let key = format!("sessions:account:{}", account_id);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let cutoff = now_ms - ttl.as_millis() as i64;
+        let mut conn = self.client.clone();
+        let _: Result<i64, _> = redis::cmd("ZREMRANGEBYSCORE")
+            .arg(&key).arg("-inf").arg(cutoff)
+            .query_async(&mut conn).await;
+        redis::cmd("ZCARD").arg(&key)
+            .query_async(&mut conn).await.unwrap_or(0)
+    }
+
     async fn acquire_lock(
         &self,
         key: &str,

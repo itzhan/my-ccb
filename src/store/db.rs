@@ -110,6 +110,10 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
+    sqlx::query("ALTER TABLE accounts ADD COLUMN max_sessions INTEGER NOT NULL DEFAULT 3")
+        .execute(pool)
+        .await
+        .ok();
 
     // api_tokens 表
     let token_schema = if driver == "sqlite" { SQLITE_TOKENS_SCHEMA } else { PG_TOKENS_SCHEMA };
