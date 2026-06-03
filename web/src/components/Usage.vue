@@ -282,8 +282,10 @@ onMounted(async () => {
       <div v-if="totalPages > 1" class="flex items-center justify-between px-4 py-3 border-t border-[#e7e0d6]">
         <p class="text-xs text-[#8c8475]">共 {{ fmt(total) }} 条，第 {{ page }} / {{ totalPages }} 页</p>
         <div class="flex gap-2">
+          <Button variant="outline" class="h-8 px-3 border-[#e7e0d6]" :disabled="page <= 1" @click="go(1)">首页</Button>
           <Button variant="outline" class="h-8 px-3 border-[#e7e0d6]" :disabled="page <= 1" @click="go(page - 1)">上一页</Button>
           <Button variant="outline" class="h-8 px-3 border-[#e7e0d6]" :disabled="page >= totalPages" @click="go(page + 1)">下一页</Button>
+          <Button variant="outline" class="h-8 px-3 border-[#e7e0d6]" :disabled="page >= totalPages" @click="go(totalPages)">末页</Button>
         </div>
       </div>
     </Card>
