@@ -419,6 +419,104 @@ impl Rewriter {
 
     // --- 系统提示词改写（仅 CC 客户端模式）---
 
+    /// normalize 模式下把 X-Stainless-OS/Arch/Runtime-Version 统一成账号的虚拟机器，
+    /// 与系统提示里的 Platform/OS 保持一致。
+    pub fn normalize_os_headers(
+        &self,
+        headers: &mut std::collections::HashMap<String, String>,
+        account: &Account,
+    ) {
+        let env = self.parse_env(account);
+        let os = stainless_os_from_platform(&env.platform);
+        let mut set = |name: &str, val: String| {
+            let lower = name.to_ascii_lowercase();
+            headers.retain(|k, _| k.to_ascii_lowercase() != lower);
+            headers.insert(name.to_string(), val);
+        };
+        // 仅归一化机器级字段（OS / Arch）。Runtime-Version 是 Bun 模拟的 node 版本，
+        // 所有真实 CC 都一样，保持客户端透传真值，不按预设覆盖。
+        set("X-Stainless-OS", os.to_string());
+        set("X-Stainless-Arch", env.arch.clone());
+    }
+
+    /// 多人共号身份归一化：把"是谁/哪台机器"统一成账号的固定虚拟身份，
+    /// 让一个号始终像同一个人在用。只改身份字段（home 用户名 / git / 平台 / OS / device_id），
+    /// 不动项目子路径和对话内容（真人本就会在多个项目里干活）。
+    pub fn normalize_cc_identity(&self, body: &mut serde_json::Value, account: &Account) {
+        let pe = self.parse_prompt_env(account);
+        let seed = if account.email.is_empty() {
+            account.id.to_string()
+        } else {
+            account.email.clone()
+        };
+        let vid = crate::model::identity::virtual_identity(&seed);
+
+        let darwin = pe.platform == "darwin";
+        let home_plain = format!("{}{}", if darwin { "/Users/" } else { "/home/" }, vid.user);
+        let home_slug = format!("{}{}", if darwin { "-Users-" } else { "-home-" }, vid.user);
+        let git_repl = format!("Git user: {}", vid.git_name);
+        let plat_repl = format!("Platform: {}", pe.platform);
+        let shell_repl = format!("Shell: {}", pe.shell);
+        let os_repl = format!("OS Version: {}", pe.os_version);
+
+        let scrub = |text: &str| -> String {
+            let mut t = HOME_PLAIN_REGEX
+                .replace_all(text, home_plain.as_str())
+                .to_string();
+            t = HOME_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
+            t = GIT_USER_REGEX.replace_all(&t, git_repl.as_str()).to_string();
+            t = PLATFORM_REGEX.replace_all(&t, plat_repl.as_str()).to_string();
+            t = SHELL_REGEX.replace_all(&t, shell_repl.as_str()).to_string();
+            t = OS_VERSION_REGEX.replace_all(&t, os_repl.as_str()).to_string();
+            t
+        };
+
+        // system 块
+        match body.get_mut("system") {
+            Some(serde_json::Value::Array(arr)) => {
+                for item in arr.iter_mut() {
+                    if let Some(t) = item.get("text").and_then(|x| x.as_str()) {
+                        let nt = scrub(t);
+                        if let Some(o) = item.as_object_mut() {
+                            o.insert("text".into(), serde_json::Value::String(nt));
+                        }
+                    }
+                }
+            }
+            Some(serde_json::Value::String(s)) => {
+                let nt = scrub(s);
+                *s = nt;
+            }
+            _ => {}
+        }
+
+        // messages 里的文本块 / system-reminder（cwd、CLAUDE.md 路径、git 也可能在这里）
+        if let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            for m in msgs.iter_mut() {
+                match m.get_mut("content") {
+                    Some(serde_json::Value::String(s)) => {
+                        let nt = scrub(s);
+                        *s = nt;
+                    }
+                    Some(serde_json::Value::Array(blocks)) => {
+                        for b in blocks.iter_mut() {
+                            if let Some(t) = b.get("text").and_then(|x| x.as_str()) {
+                                let nt = scrub(t);
+                                if let Some(o) = b.as_object_mut() {
+                                    o.insert("text".into(), serde_json::Value::String(nt));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // device_id 归一化为账号固定值
+        self.rewrite_metadata_user_id(body, account);
+    }
+
     fn rewrite_system_prompt(
         &self,
         body: &mut serde_json::Value,
@@ -720,6 +818,12 @@ static CCH_VALUE_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"cch=[a-f0-9]{5}").unwrap());
 static GIT_USER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"Git user:\s*[^\n]+").unwrap());
+/// home 路径明文形态 /Users/<name> 或 /home/<name>（捕获用户名段）
+static HOME_PLAIN_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(/(?:Users|home)/)([^/\s"<]+)"#).unwrap());
+/// home 路径 slug 形态 -Users-<name> 或 -home-<name>（出现在 .claude/projects 的目录名里）
+static HOME_SLUG_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(-(?:Users|home)-)([^-\s"/<]+)"#).unwrap());
 static SYSTEM_REMINDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<system-reminder>(.*?)</system-reminder>").unwrap());
 
@@ -1149,7 +1253,7 @@ fn scrub_git_user_in_reminders(body: &mut serde_json::Value, replacement_name: &
 /// 将 canonical env 的 platform 映射为 X-Stainless-OS 值。
 fn stainless_os_from_platform(platform: &str) -> &str {
     match platform {
-        "darwin" => "Mac OS X",
+        "darwin" => "MacOS", // 真实 Claude Code 发送的是 MacOS（抓包对齐）
         "win32" => "Windows",
         _ => "Linux",
     }

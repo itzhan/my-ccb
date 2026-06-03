@@ -33,6 +33,8 @@ pub struct GatewayService {
     rewriter: Arc<Rewriter>,
     telemetry_svc: Arc<TelemetryService>,
     client_restriction: ClientRestriction,
+    /// 多人共号身份归一化：CC 客户端请求改写成账号固定虚拟身份。
+    identity_normalize: bool,
 }
 
 impl GatewayService {
@@ -41,12 +43,14 @@ impl GatewayService {
         rewriter: Arc<Rewriter>,
         telemetry_svc: Arc<TelemetryService>,
         client_restriction: ClientRestriction,
+        identity_normalize: bool,
     ) -> Self {
         Self {
             account_svc,
             rewriter,
             telemetry_svc,
             client_restriction,
+            identity_normalize,
         }
     }
 
@@ -216,9 +220,21 @@ impl GatewayService {
 
             // 构建转发请求
             let (final_body, mut final_headers) = if client_type == ClientType::ClaudeCode {
-                // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，
-                // 仅注入账号 token。客户端之间版本/字段差异不会因改写而露馅。
-                (body_bytes.to_vec(), passthrough_headers(&headers))
+                if self.identity_normalize {
+                    // 多人共号：把"是谁/哪台机器"归一化成账号固定虚拟身份，
+                    // 让一个号始终像同一个人。其余仍尽量保真。
+                    let mut bm: serde_json::Value =
+                        serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}));
+                    self.rewriter.normalize_cc_identity(&mut bm, &account);
+                    let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
+                    let mut h = passthrough_headers(&headers);
+                    self.rewriter.normalize_os_headers(&mut h, &account);
+                    (fb, h)
+                } else {
+                    // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，
+                    // 仅注入账号 token。客户端之间版本/字段差异不会因改写而露馅。
+                    (body_bytes.to_vec(), passthrough_headers(&headers))
+                }
             } else {
                 // 非 CC 客户端（API 注入模式）：保留原有"伪装成 CC"的改写
                 debug!(

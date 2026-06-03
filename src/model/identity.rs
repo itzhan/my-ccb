@@ -1,5 +1,6 @@
 use rand::Rng;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 use super::account::{CanonicalEnvData, CanonicalProcessData, CanonicalPromptEnvData};
@@ -91,6 +92,38 @@ pub fn generate_device_id() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill(&mut bytes);
     hex::encode(bytes)
+}
+
+/// 每账号稳定的虚拟身份（多人共号时归一化"是谁"，让一个号始终像同一个人）。
+pub struct VirtualIdentity {
+    /// 虚拟用户名（home 目录名）
+    pub user: String,
+    /// 虚拟 git 用户名
+    pub git_name: String,
+}
+
+/// 真实感的(用户名, 全名)池，按账号稳定取一个。
+const IDENTITY_POOL: &[(&str, &str)] = &[
+    ("alexc", "Alex Carter"), ("jlee", "Jordan Lee"), ("samp", "Sam Patel"),
+    ("cwong", "Chris Wong"), ("tmiller", "Taylor Miller"), ("mgarcia", "Morgan Garcia"),
+    ("cbrooks", "Casey Brooks"), ("rkim", "Riley Kim"), ("jnguyen", "Jamie Nguyen"),
+    ("drowe", "Drew Rowe"), ("cmorales", "Cameron Morales"), ("qsmith", "Quinn Smith"),
+    ("bhayes", "Blake Hayes"), ("areed", "Avery Reed"), ("rfoster", "Reese Foster"),
+    ("sjordan", "Skylar Jordan"), ("dlong", "Dakota Long"), ("lcole", "Logan Cole"),
+    ("pgray", "Parker Gray"), ("hbennett", "Hayden Bennett"), ("eward", "Emerson Ward"),
+    ("fhughes", "Finley Hughes"), ("rsimmons", "Rowan Simmons"), ("sshaw", "Sawyer Shaw"),
+];
+
+/// 由账号种子(email 或 id)稳定派生一套虚拟身份。
+pub fn virtual_identity(seed: &str) -> VirtualIdentity {
+    let s = if seed.is_empty() { "account-default" } else { seed };
+    let h = Sha256::digest(s.as_bytes());
+    let idx = (u16::from_be_bytes([h[0], h[1]]) as usize) % IDENTITY_POOL.len();
+    let (user, name) = IDENTITY_POOL[idx];
+    VirtualIdentity {
+        user: user.to_string(),
+        git_name: name.to_string(),
+    }
 }
 
 /// 为新账号生成全部规范化身份字段。

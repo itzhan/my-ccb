@@ -11,6 +11,8 @@ pub struct Config {
     pub usage_poll_interval: Duration,
     /// 客户端限制级别：off / ua / strict（原始字符串，由 service::client_guard 解析）。
     pub client_restriction: String,
+    /// 身份模式：passthrough（默认，单人，原样透传）/ normalize（多人共号，归一化为账号虚拟身份）。
+    pub identity_mode: String,
 }
 
 #[derive(Clone)]
@@ -115,6 +117,7 @@ impl Config {
                     .unwrap_or(300),
             ),
             client_restriction: env::var("CLIENT_RESTRICTION").unwrap_or_else(|_| "off".into()),
+            identity_mode: env::var("IDENTITY_MODE").unwrap_or_else(|_| "passthrough".into()),
         }
     }
 }
