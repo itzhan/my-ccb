@@ -66,6 +66,7 @@ pub fn build_router(
         .route("/", get(spa_handler))
         .route("/login", get(spa_handler))
         .route("/tokens", get(spa_handler))
+        .route("/usage", get(spa_handler))
         .route("/settings", get(spa_handler));
 
     // 前端静态资源
@@ -89,6 +90,8 @@ pub fn build_router(
         )
         .route("/admin/dashboard", get(get_dashboard))
         .route("/admin/settings", get(get_settings).put(update_settings))
+        .route("/admin/usage/logs", get(get_usage_logs).delete(delete_usage_logs))
+        .route("/admin/usage/stats", get(get_usage_stats))
         .route("/admin/oauth/generate-auth-url", post(oauth_generate_auth_url))
         .route("/admin/oauth/generate-setup-token-url", post(oauth_generate_setup_token_url))
         .route("/admin/oauth/exchange-code", post(oauth_exchange_code))
@@ -619,6 +622,83 @@ async fn update_settings(
         .map(|g| g.as_str())
         .unwrap_or("off");
     Ok(Json(serde_json::json!({ "client_restriction": cr })))
+}
+
+// --- Usage Logs Handlers ---
+
+#[derive(Deserialize)]
+struct UsageLogQuery {
+    token_id: Option<i64>,
+    account_id: Option<i64>,
+    start: Option<String>,
+    end: Option<String>,
+    page: Option<i64>,
+    page_size: Option<i64>,
+}
+
+async fn get_usage_logs(
+    State(state): State<AppState>,
+    Query(q): Query<UsageLogQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let page = q.page.unwrap_or(1).max(1);
+    let page_size = q.page_size.unwrap_or(50).clamp(1, 500);
+    let (rows, total) = crate::store::usage_store::list_logs(
+        &state.pool,
+        q.token_id,
+        q.account_id,
+        q.start.as_deref(),
+        q.end.as_deref(),
+        page,
+        page_size,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    let total_pages = if page_size > 0 { (total + page_size - 1) / page_size } else { 0 };
+    Ok(Json(serde_json::json!({
+        "data": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    })))
+}
+
+#[derive(Deserialize)]
+struct UsageStatQuery {
+    group_by: Option<String>,
+    start: Option<String>,
+    end: Option<String>,
+}
+
+async fn get_usage_stats(
+    State(state): State<AppState>,
+    Query(q): Query<UsageStatQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let group_by = q.group_by.as_deref().unwrap_or("total");
+    let rows = crate::store::usage_store::stats(
+        &state.pool,
+        group_by,
+        q.start.as_deref(),
+        q.end.as_deref(),
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "data": rows })))
+}
+
+#[derive(Deserialize)]
+struct UsagePruneQuery {
+    before: String,
+}
+
+async fn delete_usage_logs(
+    State(state): State<AppState>,
+    Query(q): Query<UsagePruneQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    crate::store::usage_store::prune_logs_before(&state.pool, &q.before)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // --- OAuth Flow Handlers ---

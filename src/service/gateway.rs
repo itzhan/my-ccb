@@ -18,6 +18,16 @@ use crate::service::rewriter::{
 };
 use base64::Engine;
 use crate::service::telemetry::TelemetryService;
+use crate::service::usage_recorder::{RecordMeta, SniffStream, UsageRecorder};
+
+/// 转发日志上下文（用量记录用）。
+struct LogCtx {
+    token_id: i64,
+    account_id: i64,
+    model: String,
+    stream: bool,
+    started: std::time::Instant,
+}
 
 const UPSTREAM_BASE: &str = "https://api.anthropic.com";
 
@@ -38,6 +48,8 @@ pub struct GatewayService {
     client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
     /// 多人共号身份归一化的全局默认（账号未单独设置时回退）。
     identity_normalize: bool,
+    /// 用量记录器（异步落库，满即丢）。
+    usage_recorder: UsageRecorder,
 }
 
 impl GatewayService {
@@ -47,6 +59,7 @@ impl GatewayService {
         telemetry_svc: Arc<TelemetryService>,
         client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
         identity_normalize: bool,
+        usage_recorder: UsageRecorder,
     ) -> Self {
         Self {
             account_svc,
@@ -54,6 +67,7 @@ impl GatewayService {
             telemetry_svc,
             client_restriction,
             identity_normalize,
+            usage_recorder,
         }
     }
 
@@ -66,6 +80,8 @@ impl GatewayService {
     }
 
     async fn handle_request_inner(&self, req: Request, api_token: Option<&ApiToken>) -> Result<Response, AppError> {
+        let req_started = std::time::Instant::now();
+        let token_id = api_token.map(|t| t.id).unwrap_or(0);
         let method = req.method().clone();
         let path = req.uri().path().to_string();
         let query = req.uri().query().unwrap_or("").to_string();
@@ -86,6 +102,8 @@ impl GatewayService {
         } else {
             serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}))
         };
+        let req_model = body_map.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+        let is_stream = body_map.get("stream").and_then(|b| b.as_bool()).unwrap_or(false);
 
         // 客户端限制：非真实 Claude Code 客户端直接拒绝（运行时可改）
         let restriction = self
@@ -285,6 +303,13 @@ impl GatewayService {
                     &final_headers,
                     &final_body,
                     &account,
+                    LogCtx {
+                        token_id,
+                        account_id: account.id,
+                        model: req_model.clone(),
+                        stream: is_stream,
+                        started: req_started,
+                    },
                 )
                 .await?;
 
@@ -362,6 +387,7 @@ impl GatewayService {
         headers: &[(String, String)],
         body: &[u8],
         account: &Account,
+        log: LogCtx,
     ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response), AppError> {
         let upstream_base =
             std::env::var("UPSTREAM_BASE").unwrap_or_else(|_| UPSTREAM_BASE.to_string());
@@ -477,9 +503,20 @@ impl GatewayService {
             response_builder = response_builder.header(k.clone(), v.clone());
         }
 
-        // 流式传输响应体
-        let body_stream = resp.bytes_stream();
-        let axum_body = Body::from_stream(body_stream);
+        // 流式传输响应体；同时旁路嗅探 token 用量（不改转发字节），body 读完或丢弃时异步落库
+        let meta = RecordMeta {
+            token_id: log.token_id,
+            account_id: log.account_id,
+            req_model: log.model.clone(),
+            stream: log.stream,
+            status_code: status_code.as_u16() as i32,
+            started: log.started,
+        };
+        let inner: std::pin::Pin<
+            Box<dyn futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>,
+        > = Box::pin(resp.bytes_stream());
+        let sniffed = SniffStream::new(inner, self.usage_recorder.clone(), meta);
+        let axum_body = Body::from_stream(sniffed);
 
         let response = response_builder
             .body(axum_body)

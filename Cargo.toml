@@ -60,6 +60,8 @@ tokio-socks = "0.5"
 reqwest = { version = "=0.12.4", default-features = false, features = ["rustls-tls-manual-roots", "stream", "json", "socks"] }
 scopeguard = "1"
 dotenvy = "0.15"
+futures-core = "0.3"
+bytes = "1"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }

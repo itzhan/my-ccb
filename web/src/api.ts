@@ -106,6 +106,33 @@ export interface ApiToken {
   updated_at: string;
 }
 
+export interface UsageLog {
+  id: number;
+  token_id: number;
+  account_id: number;
+  request_id: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_5m_tokens: number;
+  cache_creation_1h_tokens: number;
+  stream: boolean;
+  status_code: number;
+  duration_ms: number;
+  created_at: string;
+}
+
+export interface UsageStat {
+  key: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  req_count: number;
+}
+
 export interface Dashboard {
   accounts: { total: number; active: number; error: number; disabled: number };
   tokens: number;
@@ -144,6 +171,21 @@ export const api = {
   getSettings: () => request<{ client_restriction: string }>('GET', '/admin/settings'),
   updateSettings: (s: { client_restriction?: string }) =>
     request<{ client_restriction: string }>('PUT', '/admin/settings', s),
+
+  getUsageLogs: (params: { token_id?: number; account_id?: number; start?: string; end?: string; page?: number; page_size?: number } = {}) => {
+    const qs = Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+      .join('&')
+    return request<PagedResult<UsageLog>>('GET', `/admin/usage/logs${qs ? '?' + qs : ''}`)
+  },
+  getUsageStats: (params: { group_by?: string; start?: string; end?: string } = {}) => {
+    const qs = Object.entries(params)
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+      .join('&')
+    return request<{ data: UsageStat[] }>('GET', `/admin/usage/stats${qs ? '?' + qs : ''}`)
+  },
 
   generateAuthUrl: (proxyUrl?: string) =>
     request<OAuthGenerateResult>('POST', '/admin/oauth/generate-auth-url', { proxy_url: proxyUrl || null }),

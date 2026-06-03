@@ -58,6 +58,15 @@ onMounted(loadDashboard);
               令牌
             </router-link>
             <router-link
+              :to="{ name: 'usage' }"
+              class="px-3 py-1.5 text-sm rounded-lg transition-colors"
+              :class="route.name === 'usage'
+                ? 'bg-[#c4704f]/10 text-[#c4704f] font-medium'
+                : 'text-[#8c8475] hover:text-[#29261e] hover:bg-[#f0ebe4]'"
+            >
+              调用记录
+            </router-link>
+            <router-link
               :to="{ name: 'settings' }"
               class="px-3 py-1.5 text-sm rounded-lg transition-colors"
               :class="route.name === 'settings'

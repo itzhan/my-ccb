@@ -80,12 +80,19 @@ async fn main() {
         account_store.clone(),
         account_svc.clone(),
     ));
+    // 用量记录器：异步批量落库 + 每日清理（明细默认保留 30 天，可用 USAGE_RETAIN_DAYS 覆盖）
+    let retain_days: i64 = std::env::var("USAGE_RETAIN_DAYS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(30);
+    let usage_recorder = service::usage_recorder::UsageRecorder::start(pool.clone(), retain_days);
     let gateway_svc = Arc::new(service::gateway::GatewayService::new(
         account_svc.clone(),
         rewriter.clone(),
         telemetry_svc.clone(),
         client_restriction.clone(),
         cfg.identity_mode == "normalize",
+        usage_recorder.clone(),
     ));
     let token_tester = Arc::new(service::oauth::TokenTester::new());
     let oauth_flow_svc = Arc::new(service::oauth_flow::OAuthFlowService::new());

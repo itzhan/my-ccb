@@ -127,6 +127,16 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
+
+    // 用量记录表（调用明细 usage_logs + 每日汇总 usage_daily）
+    let usage_schema = if driver == "sqlite" { SQLITE_USAGE_SCHEMA } else { PG_USAGE_SCHEMA };
+    for stmt in usage_schema.split(';') {
+        let stmt = stmt.trim();
+        if stmt.is_empty() {
+            continue;
+        }
+        sqlx::query(stmt).execute(pool).await?;
+    }
     Ok(())
 }
 
@@ -238,4 +248,74 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
+"#;
+
+const SQLITE_USAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id                 INTEGER NOT NULL DEFAULT 0,
+    account_id               INTEGER NOT NULL DEFAULT 0,
+    request_id               TEXT NOT NULL DEFAULT '',
+    model                    TEXT NOT NULL DEFAULT '',
+    input_tokens             INTEGER NOT NULL DEFAULT 0,
+    output_tokens            INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens        INTEGER NOT NULL DEFAULT 0,
+    cache_creation_5m_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_1h_tokens INTEGER NOT NULL DEFAULT 0,
+    stream                   INTEGER NOT NULL DEFAULT 0,
+    status_code              INTEGER NOT NULL DEFAULT 0,
+    duration_ms              INTEGER NOT NULL DEFAULT 0,
+    created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs(token_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_account_created ON usage_logs(account_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+CREATE TABLE IF NOT EXISTS usage_daily (
+    day                      TEXT NOT NULL,
+    token_id                 INTEGER NOT NULL DEFAULT 0,
+    account_id               INTEGER NOT NULL DEFAULT 0,
+    model                    TEXT NOT NULL DEFAULT '',
+    input_tokens             INTEGER NOT NULL DEFAULT 0,
+    output_tokens            INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens    INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens        INTEGER NOT NULL DEFAULT 0,
+    req_count                INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, token_id, account_id, model)
+);
+"#;
+
+const PG_USAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id                       BIGSERIAL PRIMARY KEY,
+    token_id                 BIGINT NOT NULL DEFAULT 0,
+    account_id               BIGINT NOT NULL DEFAULT 0,
+    request_id               TEXT NOT NULL DEFAULT '',
+    model                    TEXT NOT NULL DEFAULT '',
+    input_tokens             BIGINT NOT NULL DEFAULT 0,
+    output_tokens            BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens    BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens        BIGINT NOT NULL DEFAULT 0,
+    cache_creation_5m_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_1h_tokens BIGINT NOT NULL DEFAULT 0,
+    stream                   BIGINT NOT NULL DEFAULT 0,
+    status_code              BIGINT NOT NULL DEFAULT 0,
+    duration_ms              BIGINT NOT NULL DEFAULT 0,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs(token_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_account_created ON usage_logs(account_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+CREATE TABLE IF NOT EXISTS usage_daily (
+    day                      TEXT NOT NULL,
+    token_id                 BIGINT NOT NULL DEFAULT 0,
+    account_id               BIGINT NOT NULL DEFAULT 0,
+    model                    TEXT NOT NULL DEFAULT '',
+    input_tokens             BIGINT NOT NULL DEFAULT 0,
+    output_tokens            BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens    BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens        BIGINT NOT NULL DEFAULT 0,
+    req_count                BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, token_id, account_id, model)
+);
 "#;

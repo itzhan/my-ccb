@@ -305,8 +305,10 @@ version = "1.6.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "dotenvy",
+ "futures-core",
  "hex",
  "http-body-util",
  "hyper",
