@@ -347,8 +347,42 @@ impl GatewayService {
                         serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}));
                     self.rewriter.normalize_cc_identity(&mut bm, &account);
                     let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
+                    // 版本坐标:待吸取则从本请求提取(本请求即用 + 异步存库),否则用账号已存
+                    let captured = if account.needs_identity_capture() {
+                        let pkg = headers
+                            .get("x-stainless-package-version")
+                            .cloned()
+                            .unwrap_or_default();
+                        let rt = headers
+                            .get("x-stainless-runtime-version")
+                            .cloned()
+                            .unwrap_or_default();
+                        let coords = crate::service::rewriter::extract_captured_coords(&ua, &pkg, &rt);
+                        if !coords.cc_version.is_empty() {
+                            let svc = self.account_svc.clone();
+                            let (aid, cv, pv, rv) = (
+                                account.id,
+                                coords.cc_version.clone(),
+                                coords.package_version.clone(),
+                                coords.runtime_version.clone(),
+                            );
+                            tokio::spawn(async move {
+                                svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
+                            });
+                            Some(coords)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     let mut h = passthrough_headers_ordered(&ordered_headers);
-                    self.rewriter.normalize_os_headers_ordered(&mut h, &account, &req_model);
+                    self.rewriter.normalize_os_headers_ordered(
+                        &mut h,
+                        &account,
+                        &req_model,
+                        captured.as_ref(),
+                    );
                     (fb, h)
                 } else {
                     // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，

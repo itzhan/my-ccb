@@ -62,6 +62,52 @@ pub enum ClientType {
 const DEFAULT_VERSION: &str = "2.1.156";
 /// 与 DEFAULT_VERSION 对应的 Anthropic SDK 版本（x-stainless-package-version）。
 const STAINLESS_PACKAGE_VERSION: &str = "0.94.0";
+const DEFAULT_RUNTIME_VERSION: &str = "v24.3.0";
+
+/// 从客户端首请求吸取的「版本坐标」(只吸必要的版本三项,不碰 OS/device 等通用部分)。
+pub struct CapturedCoords {
+    pub cc_version: String,
+    pub package_version: String,
+    pub runtime_version: String,
+}
+
+/// 从 User-Agent 解析 CC 版本号(claude-cli/X.Y.Z … 或 claude-code/X.Y.Z)。
+fn parse_cli_version(ua: &str) -> String {
+    let rest = ua
+        .strip_prefix("claude-cli/")
+        .or_else(|| ua.strip_prefix("claude-code/"));
+    match rest {
+        Some(r) => r
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect(),
+        None => String::new(),
+    }
+}
+
+/// 从请求头组装要吸取的版本坐标。
+pub fn extract_captured_coords(
+    ua: &str,
+    package_version: &str,
+    runtime_version: &str,
+) -> CapturedCoords {
+    CapturedCoords {
+        cc_version: parse_cli_version(ua),
+        package_version: package_version.to_string(),
+        runtime_version: runtime_version.to_string(),
+    }
+}
+
+/// 三级兜底取第一个非空。
+fn pick3(a: &str, b: &str, c: &str) -> String {
+    if !a.is_empty() {
+        a.to_string()
+    } else if !b.is_empty() {
+        b.to_string()
+    } else {
+        c.to_string()
+    }
+}
 
 /// 根据模型返回正确的 anthropic-beta 值。
 fn beta_header_for_model(model_id: &str) -> &'static str {
@@ -439,29 +485,32 @@ impl Rewriter {
         headers: &mut [(String, String)],
         account: &Account,
         model: &str,
+        captured: Option<&CapturedCoords>,
     ) {
         let env = self.parse_env(account);
         let os = stainless_os_from_platform(&env.platform);
-        let version = if env.version.is_empty() {
-            DEFAULT_VERSION
-        } else {
-            env.version.as_str()
+        // 版本三项:优先本次吸取的 → 账号已存的 → 全局默认
+        let (cap_v, cap_p, cap_r) = match captured {
+            Some(c) => (
+                c.cc_version.as_str(),
+                c.package_version.as_str(),
+                c.runtime_version.as_str(),
+            ),
+            None => ("", "", ""),
         };
+        let version = pick3(cap_v, &env.version, DEFAULT_VERSION);
+        let package_version = pick3(cap_p, &env.package_version, STAINLESS_PACKAGE_VERSION);
+        let runtime_ver = pick3(cap_r, &env.node_version, DEFAULT_RUNTIME_VERSION);
         let ua = format!("claude-cli/{} (external, cli)", version);
-        let runtime_ver = if env.node_version.is_empty() {
-            "v24.3.0"
-        } else {
-            env.node_version.as_str()
-        };
-        // anthropic-beta 统一成"该版本+该模型"的标准集合,避免 18 种 beta 集泄漏版本差异
+        // anthropic-beta 统一成"该模型"的标准集合(通用部分,不吸取)
         let beta = beta_header_for_model(model);
         for (k, v) in headers.iter_mut() {
             match k.to_ascii_lowercase().as_str() {
                 "x-stainless-os" => *v = os.to_string(),
                 "x-stainless-arch" => *v = env.arch.clone(),
                 "user-agent" => *v = ua.clone(),
-                "x-stainless-package-version" => *v = STAINLESS_PACKAGE_VERSION.to_string(),
-                "x-stainless-runtime-version" => *v = runtime_ver.to_string(),
+                "x-stainless-package-version" => *v = package_version.clone(),
+                "x-stainless-runtime-version" => *v = runtime_ver.clone(),
                 "anthropic-beta" => *v = beta.to_string(),
                 "accept" => *v = "application/json".to_string(),
                 _ => {}

@@ -51,6 +51,7 @@ const form = ref({
   identity_mode: 'passthrough',
   virtual_user: '',
   virtual_git_name: '',
+  recapture_days: 0,
 });
 /** 正在测试的账号 ID */
 const testing = ref<number | null>(null);
@@ -131,6 +132,7 @@ function openCreate() {
     identity_mode: 'passthrough',
     virtual_user: '',
     virtual_git_name: '',
+    recapture_days: 0,
   };
   showForm.value = true;
 }
@@ -161,6 +163,7 @@ function openEdit(a: Account) {
     identity_mode: a.identity_mode || 'passthrough',
     virtual_user: a.virtual_user || '',
     virtual_git_name: a.virtual_git_name || '',
+    recapture_days: a.recapture_days ?? 0,
   };
   showForm.value = true;
 }
@@ -200,6 +203,7 @@ async function save() {
       updates.identity_mode = form.value.identity_mode;
       updates.virtual_user = form.value.virtual_user;
       updates.virtual_git_name = form.value.virtual_git_name;
+      updates.recapture_days = Number(form.value.recapture_days) || 0;
       await api.updateAccount(editing.value.id, updates);
     } else {
       if (form.value.auth_type === 'setup_token' && !form.value.setup_token.trim()) {
@@ -227,6 +231,7 @@ async function save() {
         identity_mode: form.value.identity_mode,
         virtual_user: form.value.virtual_user,
         virtual_git_name: form.value.virtual_git_name,
+        recapture_days: Number(form.value.recapture_days) || 0,
       };
       if (expiresAt) payload.expires_at = Number(expiresAt);
       await api.createAccount(payload);
@@ -486,6 +491,7 @@ function applyOAuthResult() {
     identity_mode: 'passthrough',
     virtual_user: '',
     virtual_git_name: '',
+    recapture_days: 0,
   };
   showForm.value = true;
 }
@@ -614,6 +620,10 @@ async function copyText(text: string) {
                 <p class="text-sm truncate" :class="a.identity_mode === 'normalize' ? 'text-emerald-600' : 'text-[#8c8475]'">
                   {{ a.identity_mode === 'normalize' ? '归一化' : '透传' }}
                   <span v-if="a.identity_mode === 'normalize' && a.effective_identity" class="text-[#b5b0a6] text-xs">· {{ a.effective_identity.virtual_user }}</span>
+                </p>
+                <p v-if="a.identity_mode === 'normalize'" class="text-[11px] mt-0.5" :class="a.identity_captured_at ? 'text-[#8c8475]' : 'text-amber-500'">
+                  <template v-if="a.identity_captured_at">已吸取 v{{ a.canonical_env?.version }}<span v-if="a.recapture_days">· 每{{ a.recapture_days }}天重吸</span></template>
+                  <template v-else>版本待吸取</template>
                 </p>
               </div>
               <div>
@@ -1096,7 +1106,20 @@ async function copyText(text: string) {
               </div>
             </div>
 
-            <!-- 编辑时显示该账号当前生效的虚拟身份 -->
+            <!-- 版本坐标吸取周期 -->
+            <div v-if="form.identity_mode === 'normalize'" class="space-y-1 pt-1">
+              <Label class="text-[#5c5647] text-xs">版本重新吸取周期（天，0=永久只吸一次）</Label>
+              <Input
+                v-model="form.recapture_days"
+                type="number"
+                min="0"
+                placeholder="0"
+                class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+              />
+              <p class="text-[11px] text-[#b5b0a6]">CC 版本/SDK 版本从该号第一个请求吸取并复用；周期到后由下一个请求重吸（模拟升级 CC）。device_id/系统等仍用预设。</p>
+            </div>
+
+            <!-- 编辑时显示该账号当前生效的虚拟身份 + 吸取状态 -->
             <div
               v-if="editing && editing.effective_identity"
               class="rounded-lg bg-[#f9f6f1] border border-[#e8e2d9] p-3 text-xs text-[#8c8475] space-y-1"
@@ -1104,6 +1127,13 @@ async function copyText(text: string) {
               <p class="font-medium text-[#5c5647]">当前生效的虚拟身份</p>
               <p>虚拟用户：<span class="font-mono text-[#29261e]">{{ editing.effective_identity.virtual_user }}</span> · git：<span class="font-mono text-[#29261e]">{{ editing.effective_identity.git_name }}</span></p>
               <p>机器：{{ editing.effective_identity.platform }} / {{ editing.effective_identity.arch }} · device_id：<span class="font-mono">{{ editing.effective_identity.device_id.slice(0, 16) }}…</span></p>
+              <p v-if="editing.identity_mode === 'normalize'">
+                版本吸取：
+                <template v-if="editing.identity_captured_at">
+                  <span class="text-emerald-600">已吸取</span> · v{{ editing.canonical_env?.version }} · {{ new Date(editing.identity_captured_at).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }}
+                </template>
+                <span v-else class="text-amber-500">待吸取（首个请求时种入）</span>
+              </p>
             </div>
           </div>
 

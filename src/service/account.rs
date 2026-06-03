@@ -181,6 +181,42 @@ impl AccountService {
         self.cache.get_slot_count(&key).await
     }
 
+    /// 持久化从客户端吸取的版本坐标(CC 版本/package/runtime)到账号 canonical_env。
+    /// 异步调用,best-effort,失败不影响转发。
+    pub async fn persist_captured_identity(
+        &self,
+        account_id: i64,
+        cc_version: &str,
+        package_version: &str,
+        runtime_version: &str,
+    ) {
+        let account = match self.store.get_by_id(account_id).await {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        let mut env = account.canonical_env.clone();
+        if let Some(obj) = env.as_object_mut() {
+            if !cc_version.is_empty() {
+                obj.insert("version".into(), serde_json::json!(cc_version));
+                obj.insert("version_base".into(), serde_json::json!(cc_version));
+            }
+            if !runtime_version.is_empty() {
+                obj.insert("node_version".into(), serde_json::json!(runtime_version));
+            }
+            if !package_version.is_empty() {
+                obj.insert("package_version".into(), serde_json::json!(package_version));
+            }
+        }
+        let now = Utc::now();
+        if let Err(e) = self
+            .store
+            .update_captured_identity(account_id, &env, &now)
+            .await
+        {
+            warn!("persist captured identity failed for {}: {}", account_id, e);
+        }
+    }
+
     /// 尝试获取 API 令牌维度的并发槽位。
     pub async fn acquire_token_slot(&self, token_id: i64, max: i32) -> Result<bool, AppError> {
         let key = format!("concurrency:token:{}", token_id);

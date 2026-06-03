@@ -222,6 +222,7 @@ struct CreateAccountRequest {
     identity_mode: Option<String>,
     virtual_user: Option<String>,
     virtual_git_name: Option<String>,
+    recapture_days: Option<i64>,
 }
 
 async fn create_account(
@@ -273,6 +274,8 @@ async fn create_account(
         identity_mode: req.identity_mode.unwrap_or_default(),
         virtual_user: req.virtual_user.unwrap_or_default(),
         virtual_git_name: req.virtual_git_name.unwrap_or_default(),
+        identity_captured_at: None,
+        recapture_days: req.recapture_days.unwrap_or(0),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -351,6 +354,9 @@ async fn update_account(
     }
     if let Some(v) = updates.get("virtual_git_name").and_then(|v| v.as_str()) {
         existing.virtual_git_name = v.to_string();
+    }
+    if let Some(v) = updates.get("recapture_days").and_then(|v| v.as_i64()) {
+        existing.recapture_days = v.max(0);
     }
     if let Some(status) = updates.get("status").and_then(|v| v.as_str()) {
         if !status.is_empty() {

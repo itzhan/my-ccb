@@ -64,6 +64,8 @@ export interface Account {
   identity_mode?: string
   virtual_user?: string
   virtual_git_name?: string
+  recapture_days?: number
+  identity_captured_at?: string | null
   effective_identity?: {
     device_id: string
     virtual_user: string

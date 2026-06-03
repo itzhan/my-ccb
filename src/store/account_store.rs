@@ -120,6 +120,8 @@ impl AccountStore {
             identity_mode: row.try_get::<String, _>("identity_mode").unwrap_or_default(),
             virtual_user: row.try_get::<String, _>("virtual_user").unwrap_or_default(),
             virtual_git_name: row.try_get::<String, _>("virtual_git_name").unwrap_or_default(),
+            identity_captured_at: Self::parse_optional_time(row, "identity_captured_at"),
+            recapture_days: row.try_get::<i64, _>("recapture_days").unwrap_or(0),
             created_at: Self::parse_time(row, "created_at"),
             updated_at: Self::parse_time(row, "updated_at"),
         }
@@ -157,8 +159,8 @@ impl AccountStore {
                 device_id, canonical_env, canonical_prompt_env, canonical_process,
                 billing_mode, account_uuid, organization_uuid, subscription_type,
                 concurrency, priority, auto_telemetry, rpm_limit,
-                identity_mode, virtual_user, virtual_git_name)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+                identity_mode, virtual_user, virtual_git_name, recapture_days)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
             RETURNING id, created_at, updated_at"#,
             self.ts(9), self.ts(10), "$11"
         );
@@ -189,6 +191,7 @@ impl AccountStore {
         .bind(&a.identity_mode)
         .bind(&a.virtual_user)
         .bind(&a.virtual_git_name)
+        .bind(a.recapture_days)
         .fetch_one(&self.pool)
         .await?;
 
@@ -209,8 +212,8 @@ impl AccountStore {
                 auth_error=$10, proxy_url=$11, billing_mode=$12,
                 account_uuid=$13, organization_uuid=$14, subscription_type=$15,
                 concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19,
-                identity_mode=$20, virtual_user=$21, virtual_git_name=$22, updated_at={}
-            WHERE id=$23"#,
+                identity_mode=$20, virtual_user=$21, virtual_git_name=$22, recapture_days=$23, updated_at={}
+            WHERE id=$24"#,
             self.ts(8), self.ts(9), self.now_expr()
         );
         sqlx::query(&q)
@@ -236,7 +239,31 @@ impl AccountStore {
             .bind(&a.identity_mode)
             .bind(&a.virtual_user)
             .bind(&a.virtual_git_name)
+            .bind(a.recapture_days)
             .bind(a.id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 持久化吸取到的版本坐标:更新 canonical_env(version/node_version/package_version)
+    /// 与 identity_captured_at。
+    pub async fn update_captured_identity(
+        &self,
+        id: i64,
+        canonical_env: &serde_json::Value,
+        captured_at: &chrono::DateTime<Utc>,
+    ) -> Result<(), AppError> {
+        let env_str = serde_json::to_string(canonical_env).unwrap_or_else(|_| "{}".into());
+        let at_str = self.fmt_time(*captured_at);
+        let q = format!(
+            "UPDATE accounts SET canonical_env=$1, identity_captured_at={} WHERE id=$3",
+            self.ts(2)
+        );
+        sqlx::query(&q)
+            .bind(&env_str)
+            .bind(at_str)
+            .bind(id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -463,6 +490,7 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     concurrency, priority, rate_limited_at, rate_limit_reset_at,
     disable_reason, auto_telemetry, telemetry_count, rpm_limit,
     usage_data, usage_fetched_at, identity_mode, virtual_user, virtual_git_name,
+    identity_captured_at, recapture_days,
     created_at, updated_at"#;
 
 #[cfg(test)]

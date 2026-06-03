@@ -202,6 +202,12 @@ pub struct Account {
     /// normalize 模式下的虚拟 git 用户名（留空则按账号自动派生）。
     #[serde(default)]
     pub virtual_git_name: String,
+    /// 版本坐标(CC 版本/package/runtime)从首个真实请求吸取的时间；None=尚未吸取。
+    #[serde(default)]
+    pub identity_captured_at: Option<DateTime<Utc>>,
+    /// 重新吸取版本坐标的周期(天)；0=永久(只吸一次)。
+    #[serde(default)]
+    pub recapture_days: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -213,6 +219,17 @@ impl Account {
     /// 是否启用 normalize 身份归一化。
     pub fn identity_normalize(&self) -> bool {
         self.identity_mode == "normalize"
+    }
+
+    /// 是否需要(重新)从客户端吸取版本坐标：从未吸过,或周期>0 且已超期。
+    pub fn needs_identity_capture(&self) -> bool {
+        match self.identity_captured_at {
+            None => true,
+            Some(at) => {
+                self.recapture_days > 0
+                    && (Utc::now() - at).num_days() >= self.recapture_days
+            }
+        }
     }
 
     /// 该账号生效的虚拟身份 (虚拟用户名, 虚拟 git 名)：优先自定义值，留空则按账号稳定派生。
@@ -265,6 +282,9 @@ pub struct CanonicalEnvData {
     pub platform_raw: String,
     pub arch: String,
     pub node_version: String,
+    /// x-stainless-package-version(Anthropic SDK 版本)；首请求吸取,留空则用全局默认。
+    #[serde(default)]
+    pub package_version: String,
     pub terminal: String,
     pub package_managers: String,
     pub runtimes: String,
