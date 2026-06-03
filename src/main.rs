@@ -86,12 +86,19 @@ async fn main() {
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(30);
     let usage_recorder = service::usage_recorder::UsageRecorder::start(pool.clone(), retain_days);
+    // 全局默认每分钟请求上限（账号未单独设 rpm_limit 时回退；0/未设=不限）。
+    let default_rpm_limit: i64 = std::env::var("DEFAULT_RPM_LIMIT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(0);
     let gateway_svc = Arc::new(service::gateway::GatewayService::new(
         account_svc.clone(),
         rewriter.clone(),
         telemetry_svc.clone(),
         client_restriction.clone(),
         cfg.identity_mode == "normalize",
+        default_rpm_limit,
         usage_recorder.clone(),
     ));
     let token_tester = Arc::new(service::oauth::TokenTester::new());

@@ -115,6 +115,10 @@ const SWITCH_DELAY: Duration = Duration::from_millis(500);
 const MAX_SAME_ACCOUNT_RETRIES: usize = 3;
 /// 同账号重试间隔。
 const SAME_ACCOUNT_RETRY_DELAY: Duration = Duration::from_millis(500);
+/// RPM 全账号满时的排队轮询间隔。
+const RPM_WAIT_STEP: Duration = Duration::from_millis(500);
+/// RPM 排队最长等待（超过则放弃，返回 503/上次响应）。
+const RPM_WAIT_MAX: Duration = Duration::from_secs(20);
 
 pub struct GatewayService {
     account_svc: Arc<AccountService>,
@@ -124,6 +128,8 @@ pub struct GatewayService {
     client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
     /// 多人共号身份归一化的全局默认（账号未单独设置时回退）。
     identity_normalize: bool,
+    /// 全局默认每分钟请求数上限（账号未单独设置 rpm_limit 时回退；<=0 不限）。
+    default_rpm_limit: i64,
     /// 用量记录器（异步落库，满即丢）。
     usage_recorder: UsageRecorder,
 }
@@ -135,6 +141,7 @@ impl GatewayService {
         telemetry_svc: Arc<TelemetryService>,
         client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
         identity_normalize: bool,
+        default_rpm_limit: i64,
         usage_recorder: UsageRecorder,
     ) -> Self {
         Self {
@@ -143,6 +150,7 @@ impl GatewayService {
             telemetry_svc,
             client_restriction,
             identity_normalize,
+            default_rpm_limit,
             usage_recorder,
         }
     }
@@ -271,9 +279,20 @@ impl GatewayService {
         let mut switch_count: usize = 0;
         let mut same_account_retries: std::collections::HashMap<i64, usize> =
             std::collections::HashMap::new();
+        // RPM 限速：本轮因配额满被临时排除的账号 + 已累计排队时长。
+        let mut rpm_rejected: Vec<i64> = Vec::new();
+        let mut rpm_waited = Duration::ZERO;
+        // 客户端类型分组（cli/vscode/sdk/desktop/other），供账号级放行过滤。
+        let client_category = client_guard::client_type_category(&ua);
+        // 因账号不放行该客户端类型而被排除的账号（永久，非排队）。
+        let mut type_rejected: Vec<i64> = Vec::new();
 
         loop {
-            let attempt = exclude_ids.len().saturating_sub(blocked_ids.len());
+            let attempt = exclude_ids
+                .len()
+                .saturating_sub(blocked_ids.len())
+                .saturating_sub(rpm_rejected.len())
+                .saturating_sub(type_rejected.len());
             // 选择账号
             let account = match self
                 .account_svc
@@ -281,10 +300,25 @@ impl GatewayService {
                 .await
             {
                 Ok(a) => a,
-                Err(_) if last_resp.is_some() => {
-                    return Ok(last_resp.unwrap());
-                }
                 Err(e) => {
+                    // 全部候选账号当前分钟配额已满 → 排队等待窗口腾出再重试（削峰）。
+                    if !rpm_rejected.is_empty() && rpm_waited < RPM_WAIT_MAX {
+                        tokio::time::sleep(RPM_WAIT_STEP).await;
+                        rpm_waited += RPM_WAIT_STEP;
+                        exclude_ids.retain(|id| !rpm_rejected.contains(id));
+                        rpm_rejected.clear();
+                        continue;
+                    }
+                    if let Some(r) = last_resp {
+                        return Ok(r);
+                    }
+                    // 所有可用账号都不放行该客户端类型 → 403（而非 503）
+                    if !type_rejected.is_empty() {
+                        return Err(AppError::Forbidden(format!(
+                            "client type '{}' not allowed by any available account",
+                            client_category
+                        )));
+                    }
                     return Err(AppError::ServiceUnavailable(format!(
                         "no available account: {}",
                         e
@@ -299,19 +333,15 @@ impl GatewayService {
                 );
             }
 
-            // RPM 检查：超限则排除该账号
-            if let Some(rpm_limit) = account.rpm_limit {
-                if rpm_limit > 0 {
-                    let current_rpm = self.account_svc.get_rpm(account.id).await;
-                    if current_rpm >= rpm_limit as i64 {
-                        warn!(
-                            "account {} rpm exceeded ({}/{}), skipping",
-                            account.id, current_rpm, rpm_limit
-                        );
-                        exclude_ids.push(account.id);
-                        continue;
-                    }
-                }
+            // 账号级客户端类型放行：该账号不收此类型则换号（其它类型仍可用别的号）
+            if !account.allows_client_type(client_category) {
+                warn!(
+                    "account {} does not allow client type '{}', switching",
+                    account.id, client_category
+                );
+                exclude_ids.push(account.id);
+                type_rejected.push(account.id);
+                continue;
             }
 
             // 自动遥测：拦截遥测请求 + 激活会话
@@ -331,6 +361,23 @@ impl GatewayService {
                 if path.starts_with("/v1/messages") {
                     self.telemetry_svc.activate_session(&account).await;
                 }
+            }
+
+            // RPM 限速：admission 时原子预占当前分钟配额（避免突发瞬时齐发越线）。
+            // 账号 rpm_limit 优先，未设置回退全局默认；满则换号，全满由上方排队等待。
+            let rpm_limit = account
+                .rpm_limit
+                .filter(|&v| v > 0)
+                .map(|v| v as i64)
+                .unwrap_or(self.default_rpm_limit);
+            if rpm_limit > 0 && !self.account_svc.reserve_rpm(account.id, rpm_limit).await {
+                warn!(
+                    "account {} rpm full (limit {}), switching/queueing",
+                    account.id, rpm_limit
+                );
+                exclude_ids.push(account.id);
+                rpm_rejected.push(account.id);
+                continue;
             }
 
             // 获取并发槽位
@@ -461,12 +508,8 @@ impl GatewayService {
                 )
                 .await?;
 
-            // 非 429 直接返回
+            // 非 429 直接返回（RPM 已在 admission 预占，无需此处递增）
             if upstream_status != StatusCode::TOO_MANY_REQUESTS {
-                // 成功转发，递增 RPM
-                if upstream_status.is_success() || upstream_status.is_informational() || upstream_status == StatusCode::OK {
-                    self.account_svc.incr_rpm(account.id).await;
-                }
                 return Ok(resp);
             }
 

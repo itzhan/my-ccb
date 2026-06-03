@@ -211,6 +211,9 @@ pub struct Account {
     /// 该账号允许的最大并发会话数(不同 x-claude-code-session-id)；0=不限。
     #[serde(default = "default_max_sessions")]
     pub max_sessions: i32,
+    /// 允许的客户端类型(逗号分隔: cli/vscode/sdk/desktop/other)；空=全部放行(默认)。
+    #[serde(default)]
+    pub allowed_client_types: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -223,6 +226,15 @@ impl Account {
     /// 是否启用 normalize 身份归一化。
     pub fn identity_normalize(&self) -> bool {
         self.identity_mode == "normalize"
+    }
+
+    /// 该账号是否放行某客户端类型分组(cli/vscode/sdk/desktop/other)。空配置=全部放行。
+    pub fn allows_client_type(&self, category: &str) -> bool {
+        let s = self.allowed_client_types.trim();
+        if s.is_empty() {
+            return true;
+        }
+        s.split(',').map(|x| x.trim()).any(|x| x == category)
     }
 
     /// 是否需要(重新)从客户端吸取版本坐标：从未吸过,或周期>0 且已超期。

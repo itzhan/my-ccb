@@ -225,6 +225,7 @@ struct CreateAccountRequest {
     virtual_git_name: Option<String>,
     recapture_days: Option<i64>,
     max_sessions: Option<i32>,
+    allowed_client_types: Option<String>,
 }
 
 async fn create_account(
@@ -279,6 +280,7 @@ async fn create_account(
         identity_captured_at: None,
         recapture_days: req.recapture_days.unwrap_or(0),
         max_sessions: req.max_sessions.unwrap_or(3),
+        allowed_client_types: req.allowed_client_types.unwrap_or_default(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -363,6 +365,9 @@ async fn update_account(
     }
     if let Some(v) = updates.get("max_sessions").and_then(|v| v.as_i64()) {
         existing.max_sessions = v.max(0) as i32;
+    }
+    if let Some(v) = updates.get("allowed_client_types").and_then(|v| v.as_str()) {
+        existing.allowed_client_types = v.trim().to_string();
     }
     if let Some(status) = updates.get("status").and_then(|v| v.as_str()) {
         if !status.is_empty() {

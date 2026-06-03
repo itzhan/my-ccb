@@ -186,6 +186,25 @@ impl CacheStore for MemoryStore {
         Ok(entry.count)
     }
 
+    async fn reserve_rpm(&self, account_id: i64, limit: i64) -> Result<bool, AppError> {
+        let key = rpm_key(account_id);
+        let mut counters = self.counters.lock().await;
+        let now = tokio::time::Instant::now();
+        let entry = counters.entry(key).or_insert(CounterEntry {
+            count: 0,
+            expires_at: now + RPM_TTL,
+        });
+        if now > entry.expires_at {
+            entry.count = 0;
+            entry.expires_at = now + RPM_TTL;
+        }
+        if limit > 0 && entry.count >= limit {
+            return Ok(false);
+        }
+        entry.count += 1;
+        Ok(true)
+    }
+
     async fn get_rpm(&self, account_id: i64) -> Result<i64, AppError> {
         let key = rpm_key(account_id);
         let mut counters = self.counters.lock().await;

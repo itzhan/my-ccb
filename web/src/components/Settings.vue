@@ -5,13 +5,14 @@ import { useToast } from '../composables/useToast';
 
 const { show: toast } = useToast();
 
-const clientRestriction = ref<'off' | 'ua' | 'strict'>('off');
+const clientRestriction = ref<'off' | 'ua' | 'cli' | 'strict'>('off');
 const loading = ref(false);
 const saving = ref(false);
 
-const options: { value: 'off' | 'ua' | 'strict'; title: string; desc: string }[] = [
+const options: { value: 'off' | 'ua' | 'cli' | 'strict'; title: string; desc: string }[] = [
   { value: 'off', title: '关闭', desc: '不限制。任何带有效令牌的客户端都能访问（普通 API 客户端会被伪装成 CC 转发）。' },
-  { value: 'ua', title: '仅校验 UA', desc: '只检查 User-Agent 是 claude-code / claude-cli。宽松，可被伪造。' },
+  { value: 'ua', title: '仅校验 UA', desc: '只检查 User-Agent 是 claude-code / claude-cli。宽松，可被伪造（SDK/VSCode 也放行）。' },
+  { value: 'cli', title: '仅 Claude Code（CLI/VSCode）', desc: '只放行交互式 Claude Code（终端 cli 与 VSCode 插件），挡掉 Agent SDK 程序化调用（sdk-cli/sdk-ts/local-agent）和桌面三方连接器。' },
   { value: 'strict', title: '严格', desc: 'UA + 系统提示相似度 + 必需 header，只放行真实 Claude Code 客户端。' },
 ];
 
@@ -19,7 +20,7 @@ async function load() {
   loading.value = true;
   try {
     const s = await api.getSettings();
-    clientRestriction.value = (s.client_restriction as 'off' | 'ua' | 'strict') || 'off';
+    clientRestriction.value = (s.client_restriction as 'off' | 'ua' | 'cli' | 'strict') || 'off';
   } catch {
     /* ignore */
   }
@@ -30,7 +31,7 @@ async function save() {
   saving.value = true;
   try {
     const s = await api.updateSettings({ client_restriction: clientRestriction.value });
-    clientRestriction.value = (s.client_restriction as 'off' | 'ua' | 'strict') || 'off';
+    clientRestriction.value = (s.client_restriction as 'off' | 'ua' | 'cli' | 'strict') || 'off';
     toast('已保存，立即生效');
   } catch (e: unknown) {
     toast((e as Error).message || '保存失败');

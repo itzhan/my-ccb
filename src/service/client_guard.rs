@@ -15,6 +15,9 @@ pub enum ClientRestriction {
     Off,
     /// 仅校验 User-Agent。
     Ua,
+    /// 仅交互式 Claude Code：UA 是 claude-cli/code 且客户端类型 ∈ {cli, claude-vscode}，
+    /// 挡掉 Agent SDK 程序化调用（sdk-cli/sdk-ts/local-agent）和 desktop-3p。
+    CliOnly,
     /// 严格：UA + 系统提示相似度 + 必需 header。
     Strict,
 }
@@ -23,6 +26,7 @@ impl ClientRestriction {
     pub fn from_env(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "ua" => Self::Ua,
+            "cli" => Self::CliOnly,
             "strict" => Self::Strict,
             _ => Self::Off,
         }
@@ -32,6 +36,7 @@ impl ClientRestriction {
         match self {
             Self::Off => "off",
             Self::Ua => "ua",
+            Self::CliOnly => "cli",
             Self::Strict => "strict",
         }
     }
@@ -40,6 +45,31 @@ impl ClientRestriction {
 /// User-Agent 匹配 `claude-code/x.x.x` 或 `claude-cli/x.x.x`（大小写不敏感）。
 static UA_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)^claude-(code|cli)/\d+\.\d+\.\d+").unwrap());
+
+/// 从 `(external, <type>, ...)` 提取客户端类型 token，如 cli/sdk-cli/claude-vscode。
+static CLIENT_TYPE_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)\(external,\s*([a-z0-9.\-]+)").unwrap());
+
+/// CliOnly 模式放行的交互式 Claude Code 客户端类型。
+const CLI_ALLOWED_TYPES: &[&str] = &["cli", "claude-vscode"];
+
+/// 取 UA 里 `(external, <type>)` 的类型 token（小写）；取不到返回 None。
+pub fn ua_client_type(ua: &str) -> Option<String> {
+    CLIENT_TYPE_PATTERN
+        .captures(ua)
+        .map(|c| c[1].to_ascii_lowercase())
+}
+
+/// 把 UA 归到客户端类型分组：cli / vscode / sdk / desktop / other（账号级放行用）。
+pub fn client_type_category(ua: &str) -> &'static str {
+    match ua_client_type(ua).as_deref() {
+        Some("cli") => "cli",
+        Some("claude-vscode") | Some("vscode") => "vscode",
+        Some("sdk-cli") | Some("sdk-ts") | Some("local-agent") => "sdk",
+        Some(t) if t.starts_with("claude-desktop") => "desktop",
+        _ => "other",
+    }
+}
 
 /// 系统提示相似度阈值（与 claude-relay-service 一致）。
 const SIMILARITY_THRESHOLD: f64 = 0.5;
@@ -89,6 +119,14 @@ pub fn validate(
 
     if mode == ClientRestriction::Ua {
         return true;
+    }
+
+    // CliOnly: 进一步要求客户端类型是交互式 Claude Code（cli/vscode），挡 SDK 自动化
+    if mode == ClientRestriction::CliOnly {
+        return match ua_client_type(ua) {
+            Some(t) => CLI_ALLOWED_TYPES.contains(&t.as_str()),
+            None => false,
+        };
     }
 
     // Step 2（Strict）：非 messages 路径仅校验 UA

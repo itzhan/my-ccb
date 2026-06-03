@@ -61,6 +61,7 @@ export interface Account {
   current_concurrency?: number
   max_sessions?: number
   current_sessions?: number
+  allowed_client_types?: string
   usage_data?: UsageData
   usage_fetched_at?: string
   identity_mode?: string

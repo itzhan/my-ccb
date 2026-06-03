@@ -123,6 +123,9 @@ impl AccountStore {
             identity_captured_at: Self::parse_optional_time(row, "identity_captured_at"),
             recapture_days: row.try_get::<i64, _>("recapture_days").unwrap_or(0),
             max_sessions: row.try_get::<i32, _>("max_sessions").unwrap_or(3),
+            allowed_client_types: row
+                .try_get::<String, _>("allowed_client_types")
+                .unwrap_or_default(),
             created_at: Self::parse_time(row, "created_at"),
             updated_at: Self::parse_time(row, "updated_at"),
         }
@@ -160,8 +163,9 @@ impl AccountStore {
                 device_id, canonical_env, canonical_prompt_env, canonical_process,
                 billing_mode, account_uuid, organization_uuid, subscription_type,
                 concurrency, priority, auto_telemetry, rpm_limit,
-                identity_mode, virtual_user, virtual_git_name, recapture_days, max_sessions)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+                identity_mode, virtual_user, virtual_git_name, recapture_days, max_sessions,
+                allowed_client_types)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
             RETURNING id, created_at, updated_at"#,
             self.ts(9), self.ts(10), "$11"
         );
@@ -194,6 +198,7 @@ impl AccountStore {
         .bind(&a.virtual_git_name)
         .bind(a.recapture_days)
         .bind(a.max_sessions)
+        .bind(&a.allowed_client_types)
         .fetch_one(&self.pool)
         .await?;
 
@@ -215,8 +220,8 @@ impl AccountStore {
                 account_uuid=$13, organization_uuid=$14, subscription_type=$15,
                 concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19,
                 identity_mode=$20, virtual_user=$21, virtual_git_name=$22, recapture_days=$23,
-                max_sessions=$24, updated_at={}
-            WHERE id=$25"#,
+                max_sessions=$24, allowed_client_types=$25, updated_at={}
+            WHERE id=$26"#,
             self.ts(8), self.ts(9), self.now_expr()
         );
         sqlx::query(&q)
@@ -244,6 +249,7 @@ impl AccountStore {
             .bind(&a.virtual_git_name)
             .bind(a.recapture_days)
             .bind(a.max_sessions)
+            .bind(&a.allowed_client_types)
             .bind(a.id)
             .execute(&self.pool)
             .await?;
@@ -494,7 +500,7 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     concurrency, priority, rate_limited_at, rate_limit_reset_at,
     disable_reason, auto_telemetry, telemetry_count, rpm_limit,
     usage_data, usage_fetched_at, identity_mode, virtual_user, virtual_git_name,
-    identity_captured_at, recapture_days, max_sessions,
+    identity_captured_at, recapture_days, max_sessions, allowed_client_types,
     created_at, updated_at"#;
 
 #[cfg(test)]

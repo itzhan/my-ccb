@@ -443,6 +443,12 @@ impl AccountService {
         self.cache.incr_rpm(account_id).await.unwrap_or(0)
     }
 
+    /// admission 时预占当前分钟 RPM 配额：未超 limit 返回 true（已计数），已满返回 false。
+    /// 缓存出错时放行（false-open），不因限速基础设施故障阻断请求。
+    pub async fn reserve_rpm(&self, account_id: i64, limit: i64) -> bool {
+        self.cache.reserve_rpm(account_id, limit).await.unwrap_or(true)
+    }
+
     pub async fn set_rate_limit(
         &self,
         id: i64,

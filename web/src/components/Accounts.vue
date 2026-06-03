@@ -53,7 +53,23 @@ const form = ref({
   virtual_git_name: '',
   recapture_days: 0,
   max_sessions: 3,
+  allowed_client_types: [] as string[],
 });
+/** 客户端类型放行选项（账号级限制） */
+const clientTypeOptions = [
+  { value: 'cli', label: 'cli 终端' },
+  { value: 'vscode', label: 'VSCode 插件' },
+  { value: 'sdk', label: 'Agent SDK' },
+  { value: 'desktop', label: '桌面三方' },
+  { value: 'other', label: '其它/非CC' },
+];
+function toggleClientType(v: string) {
+  const arr = form.value.allowed_client_types;
+  const i = arr.indexOf(v);
+  if (i >= 0) arr.splice(i, 1);
+  else arr.push(v);
+}
+
 /** 正在测试的账号 ID */
 const testing = ref<number | null>(null);
 /** 测试结果 */
@@ -135,6 +151,7 @@ function openCreate() {
     virtual_git_name: '',
     recapture_days: 0,
     max_sessions: 3,
+    allowed_client_types: [] as string[],
   };
   showForm.value = true;
 }
@@ -167,6 +184,7 @@ function openEdit(a: Account) {
     virtual_git_name: a.virtual_git_name || '',
     recapture_days: a.recapture_days ?? 0,
     max_sessions: a.max_sessions ?? 3,
+    allowed_client_types: (a.allowed_client_types || '').split(',').map(s => s.trim()).filter(Boolean),
   };
   showForm.value = true;
 }
@@ -208,6 +226,7 @@ async function save() {
       updates.virtual_git_name = form.value.virtual_git_name;
       updates.recapture_days = Number(form.value.recapture_days) || 0;
       updates.max_sessions = Math.max(0, Number(form.value.max_sessions) || 0);
+      updates.allowed_client_types = form.value.allowed_client_types.join(',');
       await api.updateAccount(editing.value.id, updates);
     } else {
       if (form.value.auth_type === 'setup_token' && !form.value.setup_token.trim()) {
@@ -237,6 +256,7 @@ async function save() {
         virtual_git_name: form.value.virtual_git_name,
         recapture_days: Number(form.value.recapture_days) || 0,
         max_sessions: Math.max(0, Number(form.value.max_sessions) || 0),
+        allowed_client_types: form.value.allowed_client_types.join(','),
       };
       if (expiresAt) payload.expires_at = Number(expiresAt);
       await api.createAccount(payload);
@@ -498,6 +518,7 @@ function applyOAuthResult() {
     virtual_git_name: '',
     recapture_days: 0,
     max_sessions: 3,
+    allowed_client_types: [] as string[],
   };
   showForm.value = true;
 }
@@ -637,6 +658,10 @@ async function copyText(text: string) {
                   <template v-if="a.identity_captured_at">已吸取 v{{ a.canonical_env?.version }}<span v-if="a.recapture_days">· 每{{ a.recapture_days }}天重吸</span></template>
                   <template v-else>版本待吸取</template>
                 </p>
+              </div>
+              <div v-if="a.allowed_client_types">
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">客户端限制</p>
+                <p class="text-sm truncate text-amber-600">仅 {{ a.allowed_client_types.split(',').filter(Boolean).join(' / ') }}</p>
               </div>
               <div>
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">自动遥测</p>
@@ -1074,6 +1099,24 @@ async function copyText(text: string) {
               placeholder="0"
               class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
             />
+          </div>
+
+          <!-- 允许的客户端类型 -->
+          <div class="space-y-2">
+            <Label class="text-[#5c5647] text-sm">允许的客户端类型 <span class="text-[#b5b0a6] text-xs">(不勾 = 全部放行)</span></Label>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="opt in clientTypeOptions"
+                :key="opt.value"
+                type="button"
+                @click="toggleClientType(opt.value)"
+                :class="form.allowed_client_types.includes(opt.value)
+                  ? 'bg-[#c4704f] text-white border-[#c4704f]'
+                  : 'bg-[#f9f6f1] text-[#5c5647] border-[#e8e2d9]'"
+                class="px-2.5 py-1 rounded-md border text-xs transition-colors"
+              >{{ opt.label }}</button>
+            </div>
+            <p class="text-[10px] text-[#b5b0a6]">收紧后,只有勾选的类型能用本账号;其它类型自动换号,全不收则 403。例:只勾 cli = 只许真人终端。</p>
           </div>
 
           <!-- 身份模拟 -->

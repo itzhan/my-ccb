@@ -43,6 +43,9 @@ pub trait CacheStore: Send + Sync {
 
     /// 递增账号当前分钟 RPM 计数，返回递增后的值。
     async fn incr_rpm(&self, account_id: i64) -> Result<i64, AppError>;
+    /// admission 时原子预占当前分钟 RPM 配额：未超 limit→计数+1 并返回 true；
+    /// 已达 limit→不计数、返回 false。limit<=0 视为不限（总是 true 且计数+1）。
+    async fn reserve_rpm(&self, account_id: i64, limit: i64) -> Result<bool, AppError>;
     /// 获取账号当前分钟 RPM 计数。
     async fn get_rpm(&self, account_id: i64) -> Result<i64, AppError>;
     /// 批量获取多个账号的当前分钟 RPM 计数。

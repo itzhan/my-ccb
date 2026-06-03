@@ -209,6 +209,29 @@ impl CacheStore for RedisStore {
         Ok(val)
     }
 
+    async fn reserve_rpm(&self, account_id: i64, limit: i64) -> Result<bool, AppError> {
+        let key = rpm_key(account_id);
+        let mut conn = self.client.clone();
+        // 原子预占：INCR；首次设 TTL；超 limit 则回退 DECR 并返回 0。
+        let script = redis::Script::new(
+            r"local v = redis.call('INCR', KEYS[1])
+              if v == 1 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
+              if tonumber(ARGV[1]) > 0 and v > tonumber(ARGV[1]) then
+                redis.call('DECR', KEYS[1])
+                return 0
+              end
+              return 1",
+        );
+        let ok: i64 = script
+            .key(&key)
+            .arg(limit)
+            .arg(RPM_TTL.as_secs() as i64)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("redis reserve rpm: {}", e)))?;
+        Ok(ok == 1)
+    }
+
     async fn get_rpm(&self, account_id: i64) -> Result<i64, AppError> {
         let key = rpm_key(account_id);
         let val: Option<i64> = self
