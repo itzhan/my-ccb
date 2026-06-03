@@ -53,6 +53,8 @@ WORKDIR /app
 COPY --from=backend /app/claude-code-gateway-bin ./claude-code-gateway
 COPY --from=frontend /app/web/dist ./web/dist/
 COPY sidecar/ ./sidecar/
+# 边车用 undici 出口（保留真 CC 的 header 顺序+大小写），在镜像内安装依赖
+RUN cd /app/sidecar && bun install --production && bun --version
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

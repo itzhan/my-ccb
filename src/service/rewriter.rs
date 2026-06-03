@@ -419,24 +419,23 @@ impl Rewriter {
 
     // --- 系统提示词改写（仅 CC 客户端模式）---
 
-    /// normalize 模式下把 X-Stainless-OS/Arch/Runtime-Version 统一成账号的虚拟机器，
-    /// 与系统提示里的 Platform/OS 保持一致。
-    pub fn normalize_os_headers(
+    /// normalize 模式下把 X-Stainless-OS/Arch 统一成账号的虚拟机器（与系统提示里的
+    /// Platform/OS 保持一致），在原位替换值、保留顺序。Runtime-Version 是 Bun 模拟的
+    /// node 版本，所有真实 CC 都一样，保持客户端透传真值，不按预设覆盖。
+    pub fn normalize_os_headers_ordered(
         &self,
-        headers: &mut std::collections::HashMap<String, String>,
+        headers: &mut [(String, String)],
         account: &Account,
     ) {
         let env = self.parse_env(account);
         let os = stainless_os_from_platform(&env.platform);
-        let mut set = |name: &str, val: String| {
-            let lower = name.to_ascii_lowercase();
-            headers.retain(|k, _| k.to_ascii_lowercase() != lower);
-            headers.insert(name.to_string(), val);
-        };
-        // 仅归一化机器级字段（OS / Arch）。Runtime-Version 是 Bun 模拟的 node 版本，
-        // 所有真实 CC 都一样，保持客户端透传真值，不按预设覆盖。
-        set("X-Stainless-OS", os.to_string());
-        set("X-Stainless-Arch", env.arch.clone());
+        for (k, v) in headers.iter_mut() {
+            match k.to_ascii_lowercase().as_str() {
+                "x-stainless-os" => *v = os.to_string(),
+                "x-stainless-arch" => *v = env.arch.clone(),
+                _ => {}
+            }
+        }
     }
 
     /// 多人共号身份归一化：把"是谁/哪台机器"统一成账号的固定虚拟身份，
@@ -1203,26 +1202,107 @@ pub fn extract_session_id_from_body(body: &serde_json::Value) -> Option<String> 
         .map(|s| s.to_string())
 }
 
-/// 纯透传请求头：去掉客户端的 auth 与 hop-by-hop 头并恢复线缆大小写，其余原样保留。
-/// 用于真实客户端的透传模式——请求不做任何改写，账号 token 由调用方注入。
-pub fn passthrough_headers(headers: &HashMap<String, String>) -> HashMap<String, String> {
-    let drop: std::collections::HashSet<&str> = [
-        "authorization",   // 客户端发的是网关令牌，丢弃，改注入账号 token
-        "x-api-key",       // 同上
-        "host",            // 由上游 URL 决定
-        "content-length",  // 由上游客户端按 body 重新计算
-        "connection",      // hop-by-hop
-    ]
-    .into_iter()
-    .collect();
-    let mut out = HashMap::new();
-    for (k, v) in headers {
-        if drop.contains(k.to_lowercase().as_str()) {
-            continue;
+/// 真实 Claude Code 的 header 顺序（小写规范名，取自 2.1.156 抓包）。
+/// auth(authorization/x-api-key) 单独注入到 x-app 之前；传输头由 undici 自动追加到末尾。
+const CANONICAL_HEADER_ORDER: &[&str] = &[
+    "accept",
+    "content-type",
+    "user-agent",
+    "x-claude-code-session-id",
+    "x-stainless-arch",
+    "x-stainless-lang",
+    "x-stainless-os",
+    "x-stainless-package-version",
+    "x-stainless-retry-count",
+    "x-stainless-runtime",
+    "x-stainless-runtime-version",
+    "x-stainless-timeout",
+    "anthropic-beta",
+    "anthropic-dangerous-direct-browser-access",
+    "anthropic-version",
+    "x-app",
+];
+
+/// 转发时需丢弃的头：auth 由调用方注入；传输头(host/content-length/connection/
+/// accept-encoding 等)由 undici 自动按真 CC 顺序追加到末尾。
+fn is_drop_header(k: &str) -> bool {
+    matches!(
+        k.to_ascii_lowercase().as_str(),
+        "authorization"
+            | "x-api-key"
+            | "host"
+            | "content-length"
+            | "connection"
+            | "accept-encoding"
+            | "proxy-connection"
+            | "transfer-encoding"
+            | "keep-alive"
+            | "te"
+            | "upgrade"
+    )
+}
+
+/// 透传(有序)：保留客户端原始顺序+大小写，去掉 auth/hop-by-hop/accept-encoding。
+/// 返回有序 Vec，供边车(undici)按真 CC 顺序原样发出。auth 由调用方注入。
+pub fn passthrough_headers_ordered(ordered: &[(String, String)]) -> Vec<(String, String)> {
+    ordered
+        .iter()
+        .filter(|(k, _)| !is_drop_header(k))
+        .map(|(k, v)| (resolve_wire_casing(k), v.clone()))
+        .collect()
+}
+
+/// 把(无序 HashMap)请求头按真 CC 规范顺序排成有序 Vec(用于 API 注入模式)。
+/// 已知头按 CANONICAL_HEADER_ORDER 排，未知头按字母序追加在 x-app 之前。
+pub fn order_headers_canonical(map: &HashMap<String, String>) -> Vec<(String, String)> {
+    let lower_map: HashMap<String, &String> = map
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), v))
+        .collect();
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for canon in CANONICAL_HEADER_ORDER {
+        if *canon == "x-app" {
+            continue; // x-app 最后单独放(auth 注入在它前面)
         }
-        out.insert(resolve_wire_casing(k), v.clone());
+        if let Some(v) = lower_map.get(*canon) {
+            out.push((resolve_wire_casing(canon), (*v).clone()));
+            used.insert((*canon).to_string());
+        }
+    }
+    // 未知头(不在规范表、非 drop、非 x-app)按字母序追加
+    let mut extras: Vec<(&String, &String)> = map
+        .iter()
+        .filter(|(k, _)| {
+            let lk = k.to_ascii_lowercase();
+            !is_drop_header(&lk) && !used.contains(&lk) && lk != "x-app"
+        })
+        .collect();
+    extras.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+    for (k, v) in extras {
+        out.push((resolve_wire_casing(k), v.clone()));
+    }
+    if let Some(v) = lower_map.get("x-app") {
+        out.push((resolve_wire_casing("x-app"), (*v).clone()));
     }
     out
+}
+
+/// 把账号 token 以 authorization 头注入到 x-app 之前(真 CC 的 auth 槽位)，无 x-app 则追加末尾。
+pub fn inject_auth_before_xapp(
+    mut headers: Vec<(String, String)>,
+    token: &str,
+) -> Vec<(String, String)> {
+    let auth = ("authorization".to_string(), format!("Bearer {}", token));
+    if let Some(pos) = headers
+        .iter()
+        .position(|(k, _)| k.eq_ignore_ascii_case("x-app"))
+    {
+        headers.insert(pos, auth);
+    } else {
+        headers.push(auth);
+    }
+    headers
 }
 
 /// 清理 body 中的内部 _session_id 标记。

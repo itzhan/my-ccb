@@ -4,6 +4,7 @@
 /tmp
 /web/dist
 /web/node_modules
+/sidecar/node_modules
 *.db
 *.db-shm
 *.db-wal

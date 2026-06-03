@@ -13,8 +13,10 @@ use crate::model::api_token::ApiToken;
 use crate::service::account::{AccountService, RateLimitClassification};
 use crate::service::client_guard::{self, ClientRestriction};
 use crate::service::rewriter::{
-    clean_session_id_from_body, detect_client_type, passthrough_headers, ClientType, Rewriter,
+    clean_session_id_from_body, detect_client_type, inject_auth_before_xapp,
+    order_headers_canonical, passthrough_headers_ordered, ClientType, Rewriter,
 };
+use base64::Engine;
 use crate::service::telemetry::TelemetryService;
 
 const UPSTREAM_BASE: &str = "https://api.anthropic.com";
@@ -68,8 +70,9 @@ impl GatewayService {
         let path = req.uri().path().to_string();
         let query = req.uri().query().unwrap_or("").to_string();
 
-        // 提取 header
+        // 提取 header（HashMap 供检测/改写用；有序 Vec 保留客户端原始 wire 顺序，供透传/边车用）
         let headers = extract_headers(req.headers());
+        let ordered_headers = extract_headers_ordered(req.headers());
         let ua = headers.get("User-Agent").or_else(|| headers.get("user-agent")).cloned().unwrap_or_default();
 
         // 读取请求体
@@ -225,7 +228,7 @@ impl GatewayService {
             });
 
             // 构建转发请求
-            let (final_body, mut final_headers) = if client_type == ClientType::ClaudeCode {
+            let (final_body, final_headers) = if client_type == ClientType::ClaudeCode {
                 // 每账号自己的 identity_mode 优先；账号未设置时回退到全局默认。
                 let normalize = account.identity_normalize()
                     || (account.identity_mode.is_empty() && self.identity_normalize);
@@ -236,13 +239,13 @@ impl GatewayService {
                         serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}));
                     self.rewriter.normalize_cc_identity(&mut bm, &account);
                     let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
-                    let mut h = passthrough_headers(&headers);
-                    self.rewriter.normalize_os_headers(&mut h, &account);
+                    let mut h = passthrough_headers_ordered(&ordered_headers);
+                    self.rewriter.normalize_os_headers_ordered(&mut h, &account);
                     (fb, h)
                 } else {
                     // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，
-                    // 仅注入账号 token。客户端之间版本/字段差异不会因改写而露馅。
-                    (body_bytes.to_vec(), passthrough_headers(&headers))
+                    // 仅注入账号 token。连 header 顺序+大小写都保留客户端原样。
+                    (body_bytes.to_vec(), passthrough_headers_ordered(&ordered_headers))
                 }
             } else {
                 // 非 CC 客户端（API 注入模式）：保留原有"伪装成 CC"的改写
@@ -265,14 +268,13 @@ impl GatewayService {
                 );
                 clean_session_id_from_body(&mut rewritten_body_map);
                 let fb = serde_json::to_vec(&rewritten_body_map).unwrap_or(rewritten_body);
-                (fb, rewritten_headers)
+                // 排成真 CC 规范顺序，供边车(undici)按序发出
+                (fb, order_headers_canonical(&rewritten_headers))
             };
 
             let upstream_token = self.account_svc.resolve_upstream_token(account.id).await?;
-            final_headers.insert(
-                "authorization".into(),
-                format!("Bearer {}", upstream_token),
-            );
+            // 注入账号 token 到真 CC 的 auth 槽位(x-app 之前)，保持顺序一致
+            let final_headers = inject_auth_before_xapp(final_headers, &upstream_token);
 
             // 转发到上游
             let (upstream_status, upstream_headers, resp) = self
@@ -357,7 +359,7 @@ impl GatewayService {
         method: &str,
         path: &str,
         query: &str,
-        headers: &std::collections::HashMap<String, String>,
+        headers: &[(String, String)],
         body: &[u8],
         account: &Account,
     ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response), AppError> {
@@ -404,14 +406,19 @@ impl GatewayService {
             _ => client.post(&request_url),
         };
 
-        for (k, v) in headers {
-            req_builder = req_builder.header(k, v);
-        }
         if use_sidecar {
-            // 控制头：告诉边车真正的上游与账号代理
+            // 边车模式：不逐个发头(到本地边车的这一跳顺序无意义且会被 Bun 重排)，
+            // 而是把【有序】请求头打包进 x-ccb-headers，由边车用 undici 按真 CC 顺序发出。
+            let payload = serde_json::to_string(headers).unwrap_or_else(|_| "[]".into());
+            let b64 = base64::engine::general_purpose::STANDARD.encode(payload);
             req_builder = req_builder.header("x-ccb-upstream", &upstream_base);
             req_builder = req_builder.header("x-ccb-proxy", &account.proxy_url);
+            req_builder = req_builder.header("x-ccb-headers", b64);
         } else {
+            // craftls 直连：reqwest 按添加顺序发头，逐个按序加上
+            for (k, v) in headers {
+                req_builder = req_builder.header(k, v);
+            }
             req_builder = req_builder.header("Host", "api.anthropic.com");
         }
         req_builder = req_builder.body(body.to_vec());
@@ -491,6 +498,18 @@ fn extract_headers(headers: &HeaderMap) -> std::collections::HashMap<String, Str
         }
     }
     map
+}
+
+/// 按客户端发来的【原始 wire 顺序】提取 header（hyper 的 HeaderMap 迭代即插入顺序）。
+/// 保留顺序是为了透传时让发往上游的 header 顺序与真实 Claude Code 完全一致。
+fn extract_headers_ordered(headers: &HeaderMap) -> Vec<(String, String)> {
+    let mut out = Vec::with_capacity(headers.len());
+    for (k, v) in headers {
+        if let Ok(val) = v.to_str() {
+            out.push((k.as_str().to_string(), val.to_string()));
+        }
+    }
+    out
 }
 
 /// Claude Code 主动扫描响应头检测 AI Gateway/代理（src/services/api/logging.ts）。
