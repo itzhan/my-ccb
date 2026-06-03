@@ -20,13 +20,89 @@ use base64::Engine;
 use crate::service::telemetry::TelemetryService;
 use crate::service::usage_recorder::{RecordMeta, SniffStream, UsageRecorder};
 
-/// 转发日志上下文（用量记录用）。
+/// 转发日志上下文（用量记录用，含详细诊断字段）。
 struct LogCtx {
     token_id: i64,
     account_id: i64,
     model: String,
     stream: bool,
     started: std::time::Instant,
+    client_ip: String,
+    user_agent: String,
+    path: String,
+    session_id: String,
+    user_id: String,
+    req_headers: String,
+}
+
+/// 取客户端 IP：优先 X-Forwarded-For / X-Real-IP，回退连接对端地址。
+fn client_ip_from(req: &Request, headers: &std::collections::HashMap<String, String>) -> String {
+    if let Some(xff) = headers.get("x-forwarded-for") {
+        if let Some(first) = xff.split(',').next() {
+            let t = first.trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    if let Some(xr) = headers.get("x-real-ip") {
+        if !xr.is_empty() {
+            return xr.clone();
+        }
+    }
+    if let Some(ci) = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    {
+        return ci.0.ip().to_string();
+    }
+    String::new()
+}
+
+/// 把请求头序列化成 JSON（脱敏 auth/cookie），供封号分析。
+fn sanitized_headers_json(headers: &std::collections::HashMap<String, String>) -> String {
+    let drop = ["authorization", "x-api-key", "cookie", "proxy-authorization"];
+    let m: serde_json::Map<String, serde_json::Value> = headers
+        .iter()
+        .filter(|(k, _)| !drop.contains(&k.to_lowercase().as_str()))
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    serde_json::to_string(&m).unwrap_or_default()
+}
+
+/// 把上游响应头序列化成 JSON（含 anthropic-ratelimit-* / request-id / cf-ray 等封号关键信号）。
+fn resp_headers_json(h: &reqwest::header::HeaderMap) -> String {
+    let m: serde_json::Map<String, serde_json::Value> = h
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_str().to_string(),
+                serde_json::Value::String(v.to_str().unwrap_or("").to_string()),
+            )
+        })
+        .collect();
+    serde_json::to_string(&m).unwrap_or_default()
+}
+
+/// 脱敏代理 URL 的密码：scheme://user:pass@host -> scheme://user:***@host。
+fn mask_proxy(p: &str) -> String {
+    if p.is_empty() {
+        return String::new();
+    }
+    if let (Some(scheme_end), Some(at)) = (p.find("://"), p.rfind('@')) {
+        if at > scheme_end + 3 {
+            let creds = &p[scheme_end + 3..at];
+            if let Some(colon) = creds.find(':') {
+                return format!(
+                    "{}://{}:***@{}",
+                    &p[..scheme_end],
+                    &creds[..colon],
+                    &p[at + 1..]
+                );
+            }
+        }
+    }
+    p.to_string()
 }
 
 const UPSTREAM_BASE: &str = "https://api.anthropic.com";
@@ -90,6 +166,14 @@ impl GatewayService {
         let headers = extract_headers(req.headers());
         let ordered_headers = extract_headers_ordered(req.headers());
         let ua = headers.get("User-Agent").or_else(|| headers.get("user-agent")).cloned().unwrap_or_default();
+        // 详细诊断：客户端 IP / 会话 id / 请求头快照（在 req 被消费前抓取）
+        let log_client_ip = client_ip_from(&req, &headers);
+        let log_session_id = headers
+            .get("x-claude-code-session-id")
+            .or_else(|| headers.get("X-Claude-Code-Session-Id"))
+            .cloned()
+            .unwrap_or_default();
+        let log_req_headers = sanitized_headers_json(&headers);
 
         // 读取请求体
         let body_bytes = axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024)
@@ -104,6 +188,12 @@ impl GatewayService {
         };
         let req_model = body_map.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
         let is_stream = body_map.get("stream").and_then(|b| b.as_bool()).unwrap_or(false);
+        let log_user_id = body_map
+            .get("metadata")
+            .and_then(|m| m.get("user_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         // 客户端限制：非真实 Claude Code 客户端直接拒绝（运行时可改）
         let restriction = self
@@ -309,6 +399,12 @@ impl GatewayService {
                         model: req_model.clone(),
                         stream: is_stream,
                         started: req_started,
+                        client_ip: log_client_ip.clone(),
+                        user_agent: ua.clone(),
+                        path: path.clone(),
+                        session_id: log_session_id.clone(),
+                        user_id: log_user_id.clone(),
+                        req_headers: log_req_headers.clone(),
                     },
                 )
                 .await?;
@@ -511,6 +607,14 @@ impl GatewayService {
             stream: log.stream,
             status_code: status_code.as_u16() as i32,
             started: log.started,
+            client_ip: log.client_ip.clone(),
+            user_agent: log.user_agent.clone(),
+            path: log.path.clone(),
+            session_id: log.session_id.clone(),
+            user_id: log.user_id.clone(),
+            proxy: mask_proxy(&account.proxy_url),
+            req_headers: log.req_headers.clone(),
+            resp_headers: resp_headers_json(&upstream_headers),
         };
         let inner: std::pin::Pin<
             Box<dyn futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>,

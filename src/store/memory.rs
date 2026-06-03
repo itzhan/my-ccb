@@ -97,6 +97,11 @@ impl CacheStore for MemoryStore {
         }
     }
 
+    async fn get_slot_count(&self, key: &str) -> i64 {
+        let slots = self.slots.lock().await;
+        slots.get(key).copied().unwrap_or(0).max(0)
+    }
+
     async fn acquire_lock(
         &self,
         key: &str,

@@ -58,6 +58,7 @@ export interface Account {
   disable_reason?: string
   rpm_limit?: number | null
   current_rpm?: number | null
+  current_concurrency?: number
   usage_data?: UsageData
   usage_fetched_at?: string
   identity_mode?: string
@@ -122,6 +123,14 @@ export interface UsageLog {
   status_code: number;
   duration_ms: number;
   error: string;
+  client_ip: string;
+  user_agent: string;
+  path: string;
+  session_id: string;
+  user_id: string;
+  proxy: string;
+  req_headers: string;
+  resp_headers: string;
   created_at: string;
 }
 

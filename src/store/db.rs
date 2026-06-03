@@ -137,11 +137,26 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         }
         sqlx::query(stmt).execute(pool).await?;
     }
-    // usage_logs 增量迁移：错误文本列
-    sqlx::query("ALTER TABLE usage_logs ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+    // usage_logs 增量迁移：错误文本 + 详细诊断列
+    for col in [
+        "error",
+        "client_ip",
+        "user_agent",
+        "path",
+        "session_id",
+        "user_id",
+        "proxy",
+        "req_headers",
+        "resp_headers",
+    ] {
+        sqlx::query(&format!(
+            "ALTER TABLE usage_logs ADD COLUMN {} TEXT NOT NULL DEFAULT ''",
+            col
+        ))
         .execute(pool)
         .await
         .ok();
+    }
     Ok(())
 }
 
@@ -272,6 +287,14 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     status_code              INTEGER NOT NULL DEFAULT 0,
     duration_ms              INTEGER NOT NULL DEFAULT 0,
     error                    TEXT NOT NULL DEFAULT '',
+    client_ip                TEXT NOT NULL DEFAULT '',
+    user_agent               TEXT NOT NULL DEFAULT '',
+    path                     TEXT NOT NULL DEFAULT '',
+    session_id               TEXT NOT NULL DEFAULT '',
+    user_id                  TEXT NOT NULL DEFAULT '',
+    proxy                    TEXT NOT NULL DEFAULT '',
+    req_headers              TEXT NOT NULL DEFAULT '',
+    resp_headers             TEXT NOT NULL DEFAULT '',
     created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs(token_id, created_at);
@@ -308,6 +331,14 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     status_code              BIGINT NOT NULL DEFAULT 0,
     duration_ms              BIGINT NOT NULL DEFAULT 0,
     error                    TEXT NOT NULL DEFAULT '',
+    client_ip                TEXT NOT NULL DEFAULT '',
+    user_agent               TEXT NOT NULL DEFAULT '',
+    path                     TEXT NOT NULL DEFAULT '',
+    session_id               TEXT NOT NULL DEFAULT '',
+    user_id                  TEXT NOT NULL DEFAULT '',
+    proxy                    TEXT NOT NULL DEFAULT '',
+    req_headers              TEXT NOT NULL DEFAULT '',
+    resp_headers             TEXT NOT NULL DEFAULT '',
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs(token_id, created_at);

@@ -271,6 +271,15 @@ pub struct RecordMeta {
     pub stream: bool,
     pub status_code: i32,
     pub started: std::time::Instant,
+    // 详细诊断
+    pub client_ip: String,
+    pub user_agent: String,
+    pub path: String,
+    pub session_id: String,
+    pub user_id: String,
+    pub proxy: String,
+    pub req_headers: String,
+    pub resp_headers: String,
 }
 
 /// 包裹上游响应体：转发字节原样不变，流被读完(None)或丢弃(Drop)时落一条用量记录。
@@ -334,6 +343,14 @@ impl<S> SniffStream<S> {
             status_code: self.meta.status_code,
             duration_ms: self.meta.started.elapsed().as_millis() as i64,
             error,
+            client_ip: self.meta.client_ip.clone(),
+            user_agent: self.meta.user_agent.clone(),
+            path: self.meta.path.clone(),
+            session_id: self.meta.session_id.clone(),
+            user_id: self.meta.user_id.clone(),
+            proxy: self.meta.proxy.clone(),
+            req_headers: self.meta.req_headers.clone(),
+            resp_headers: self.meta.resp_headers.clone(),
         };
         // 成功(有用量)或失败(有错误正文)才记；中途被丢弃且未读 body 的重试不记
         if rec.has_usage() || !rec.error.is_empty() {

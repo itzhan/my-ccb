@@ -99,6 +99,22 @@ function go(p: number) {
   loadLogs();
 }
 
+/** 展开的明细行 id */
+const expanded = ref<number | null>(null);
+function toggle(id: number) {
+  expanded.value = expanded.value === id ? null : id;
+}
+
+/** 把 JSON 字符串美化；解析失败则原样返回 */
+function pretty(s: string): string {
+  if (!s) return '';
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s;
+  }
+}
+
 async function loadModels() {
   try {
     const res = await api.getUsageStats({ group_by: 'model' });
@@ -217,8 +233,11 @@ onMounted(async () => {
               <td colspan="10" class="px-4 py-8 text-center text-[#8c8475]">暂无调用记录</td>
             </tr>
             <template v-for="r in logs" :key="r.id">
-              <tr class="border-b border-[#f0ebe4] hover:bg-[#faf7f2]" :class="{ 'border-b-0': r.error }">
-                <td class="px-4 py-2.5 text-[#29261e] whitespace-nowrap">{{ new Date(r.created_at).toLocaleString() }}</td>
+              <tr class="border-b border-[#f0ebe4] hover:bg-[#faf7f2] cursor-pointer" :class="{ 'border-b-0': expanded === r.id }" @click="toggle(r.id)">
+                <td class="px-4 py-2.5 text-[#29261e] whitespace-nowrap">
+                  <span class="inline-block w-3 text-[#b5b0a6]">{{ expanded === r.id ? '▾' : '▸' }}</span>
+                  {{ new Date(r.created_at).toLocaleString() }}
+                </td>
                 <td class="px-4 py-2.5 text-[#8c8475]">{{ tokenName(r.token_id) }}</td>
                 <td class="px-4 py-2.5 text-[#8c8475]">{{ accountName(r.account_id) }}</td>
                 <td class="px-4 py-2.5 text-[#29261e]">{{ r.model || '-' }}<span v-if="r.stream" class="ml-1 text-[10px] text-[#c4704f]">流</span></td>
@@ -229,9 +248,31 @@ onMounted(async () => {
                 <td class="px-4 py-2.5 text-right text-[#8c8475]">{{ r.duration_ms }}ms</td>
                 <td class="px-4 py-2.5 text-right" :class="r.status_code >= 200 && r.status_code < 300 ? 'text-emerald-600' : 'text-red-500'">{{ r.status_code }}</td>
               </tr>
-              <tr v-if="r.error" class="border-b border-[#f0ebe4]">
-                <td colspan="10" class="px-4 pb-2.5 pt-0">
-                  <pre class="text-[11px] text-red-500 bg-red-50 rounded-lg px-3 py-2 whitespace-pre-wrap break-all max-h-32 overflow-auto">{{ r.error }}</pre>
+              <tr v-if="expanded === r.id" class="border-b border-[#f0ebe4] bg-[#faf7f2]">
+                <td colspan="10" class="px-4 pb-4 pt-1">
+                  <div v-if="r.error" class="mb-3">
+                    <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-1">错误正文</p>
+                    <pre class="text-[11px] text-red-600 bg-red-50 rounded-lg px-3 py-2 whitespace-pre-wrap break-all max-h-48 overflow-auto">{{ pretty(r.error) }}</pre>
+                  </div>
+                  <div class="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 mb-3">
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">请求ID</span><p class="font-mono text-[11px] text-[#5c5647] break-all">{{ r.request_id || '-' }}</p></div>
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">客户端IP</span><p class="font-mono text-[11px] text-[#5c5647]">{{ r.client_ip || '-' }}</p></div>
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">出口代理</span><p class="font-mono text-[11px] text-[#5c5647] break-all">{{ r.proxy || '直连' }}</p></div>
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">User-Agent</span><p class="font-mono text-[11px] text-[#5c5647] break-all">{{ r.user_agent || '-' }}</p></div>
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">会话ID</span><p class="font-mono text-[11px] text-[#5c5647] break-all">{{ r.session_id || '-' }}</p></div>
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">user_id</span><p class="font-mono text-[11px] text-[#5c5647] break-all">{{ r.user_id || '-' }}</p></div>
+                    <div><span class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">路径</span><p class="font-mono text-[11px] text-[#5c5647] break-all">{{ r.path || '-' }}</p></div>
+                  </div>
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <div>
+                      <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-1">上游响应头(含限流/cf-ray/request-id)</p>
+                      <pre class="text-[11px] text-[#5c5647] bg-white border border-[#e7e0d6] rounded-lg px-3 py-2 whitespace-pre-wrap break-all max-h-64 overflow-auto">{{ pretty(r.resp_headers) || '-' }}</pre>
+                    </div>
+                    <div>
+                      <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-1">请求头(已脱敏)</p>
+                      <pre class="text-[11px] text-[#5c5647] bg-white border border-[#e7e0d6] rounded-lg px-3 py-2 whitespace-pre-wrap break-all max-h-64 overflow-auto">{{ pretty(r.req_headers) || '-' }}</pre>
+                    </div>
+                  </div>
                 </td>
               </tr>
             </template>

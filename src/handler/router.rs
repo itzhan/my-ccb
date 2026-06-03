@@ -175,6 +175,8 @@ async fn list_accounts(
         if a.rpm_limit.map(|v| v > 0).unwrap_or(false) {
             obj["current_rpm"] = serde_json::json!(rpm_counts.get(&a.id).copied().unwrap_or(0));
         }
+        // 实时并发占用数
+        obj["current_concurrency"] = serde_json::json!(state.account_svc.get_slot_count(a.id).await);
         // 该账号当前呈现的虚拟身份（自定义优先，留空则派生）+ 机器指纹，供详情展示
         let (vuser, vgit) = a.effective_virtual_identity();
         let env: crate::model::account::CanonicalEnvData =

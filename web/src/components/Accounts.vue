@@ -95,10 +95,10 @@ let autoReloadTimer: ReturnType<typeof setInterval> | null = null;
 
 onMounted(() => {
   load();
-  // 每 60 秒静默重拉账户列表（usage_data 会带新值过来）
+  // 每 8 秒静默重拉账户列表（实时并发 / usage_data 随之刷新）
   autoReloadTimer = setInterval(() => {
     load();
-  }, 60 * 1000);
+  }, 8 * 1000);
 });
 
 onUnmounted(() => {
@@ -366,52 +366,10 @@ function statusStyle(a: Account): { class: string; label: string } {
   return { class: 'bg-gray-100 text-gray-500 border-gray-200', label: '停用' };
 }
 
-/**
- * 遮蔽 Token 显示
- * @param t Token 原始值
- */
-function maskToken(t: string): string {
-  if (t.length <= 20) return t;
-  return t.slice(0, 20) + '...';
-}
-
-/**
- * 获取认证方式标签
- * @param authType 认证方式
- */
-function authTypeLabel(authType: string): string {
-  return authType === 'oauth' ? 'OAuth' : 'Setup Token';
-}
-
-/**
- * 获取当前账号显示的凭证摘要
- * @param account 账号对象
- */
-function authSecretPreview(account: Account): string {
-  if (account.auth_type === 'oauth') {
-    return maskToken(account.refresh_token || account.access_token || '未配置');
-  }
-  return maskToken(account.setup_token || '未配置');
-}
-
-/**
- * 格式化 OAuth 过期时间
- * @param expiresAt 毫秒时间戳
- */
+/** 格式化 OAuth 过期时间(毫秒时间戳) */
 function formatExpiresAt(expiresAt?: number | null): string {
   if (!expiresAt) return '未提供';
   return new Date(expiresAt).toLocaleString('zh-CN');
-}
-
-/**
- * 格式化字节数为可读字符串
- */
-function formatBytes(bytes?: number): string {
-  if (!bytes) return '—';
-  if (bytes >= 1_073_741_824) return (bytes / 1_073_741_824).toFixed(0) + 'G';
-  if (bytes >= 1_048_576) return (bytes / 1_048_576).toFixed(0) + 'M';
-  if (bytes >= 1024) return (bytes / 1024).toFixed(0) + 'K';
-  return bytes + 'B';
 }
 
 /** 切换认证方式 */
@@ -621,8 +579,10 @@ async function copyText(text: string) {
           <div class="pt-2 border-t border-[#f0ebe4] space-y-2">
             <div class="grid grid-cols-3 gap-3">
               <div class="text-center">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">并发</p>
-                <p class="text-sm font-medium text-[#29261e]">{{ a.concurrency }}</p>
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">并发(实时)</p>
+                <p class="text-sm font-medium" :class="(a.current_concurrency || 0) >= a.concurrency ? 'text-red-500' : (a.current_concurrency || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
+                  {{ a.current_concurrency || 0 }} / {{ a.concurrency }}
+                </p>
               </div>
               <div class="text-center">
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">优先级</p>
@@ -650,14 +610,6 @@ async function copyText(text: string) {
                 </div>
               </div>
               <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">代理</p>
-                <p class="text-sm text-[#8c8475] truncate">{{ a.proxy_url || '直连' }}</p>
-              </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">认证方式</p>
-                <p class="text-sm text-[#8c8475] truncate">{{ authTypeLabel(a.auth_type) }}</p>
-              </div>
-              <div>
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">身份模拟</p>
                 <p class="text-sm truncate" :class="a.identity_mode === 'normalize' ? 'text-emerald-600' : 'text-[#8c8475]'">
                   {{ a.identity_mode === 'normalize' ? '归一化' : '透传' }}
@@ -674,37 +626,9 @@ async function copyText(text: string) {
                   遥测中 · 停止于 {{ new Date(a.telemetry_expires_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}
                 </p>
               </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">
-                  {{ a.auth_type === 'oauth' ? 'Refresh Token' : 'Setup Token' }}
-                </p>
-                <p class="font-mono text-[11px] text-[#8c8475] truncate">{{ authSecretPreview(a) }}</p>
-              </div>
-              <div v-if="a.auth_type === 'oauth'">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">过期时间</p>
-                <p class="text-sm text-[#8c8475] truncate">{{ formatExpiresAt(a.expires_at) }}</p>
-              </div>
               <div v-if="a.auth_type === 'oauth' && a.auth_error">
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">认证错误</p>
                 <p class="text-xs text-red-500 line-clamp-2">{{ a.auth_error }}</p>
-              </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">环境指纹</p>
-                <p class="text-xs text-[#8c8475] truncate">
-                  {{ a.canonical_env?.platform || '—' }} / {{ a.canonical_env?.arch || '—' }} · v{{ a.canonical_env?.version || '—' }}
-                </p>
-              </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">提示词环境</p>
-                <p class="text-xs text-[#8c8475] truncate">
-                  {{ a.canonical_prompt_env?.platform || '—' }} · {{ a.canonical_prompt_env?.shell || '—' }} · {{ a.canonical_prompt_env?.working_dir || '—' }}
-                </p>
-              </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">进程指纹</p>
-                <p class="text-xs text-[#8c8475] truncate">
-                  内存 {{ formatBytes(a.canonical_process?.constrained_memory) }} · RSS {{ formatBytes(a.canonical_process?.rss_range?.[0]) }}–{{ formatBytes(a.canonical_process?.rss_range?.[1]) }}
-                </p>
               </div>
             </div>
           </div>

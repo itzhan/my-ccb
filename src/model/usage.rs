@@ -18,6 +18,15 @@ pub struct UsageRecord {
     pub duration_ms: i64,
     /// 失败请求(非 2xx)的上游错误正文(截断)；成功为空。
     pub error: String,
+    // --- 详细诊断(封号分析用) ---
+    pub client_ip: String,
+    pub user_agent: String,
+    pub path: String,
+    pub session_id: String,
+    pub user_id: String,
+    pub proxy: String,
+    pub req_headers: String,
+    pub resp_headers: String,
 }
 
 impl UsageRecord {
@@ -48,6 +57,14 @@ pub struct UsageLogRow {
     pub status_code: i64,
     pub duration_ms: i64,
     pub error: String,
+    pub client_ip: String,
+    pub user_agent: String,
+    pub path: String,
+    pub session_id: String,
+    pub user_id: String,
+    pub proxy: String,
+    pub req_headers: String,
+    pub resp_headers: String,
     pub created_at: String,
 }
 

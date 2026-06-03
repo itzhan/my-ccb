@@ -18,8 +18,9 @@ pub async fn batch_insert_and_rollup(
             r#"INSERT INTO usage_logs
                 (token_id, account_id, request_id, model, input_tokens, output_tokens,
                  cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens,
-                 cache_creation_1h_tokens, stream, status_code, duration_ms, error)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+                 cache_creation_1h_tokens, stream, status_code, duration_ms, error,
+                 client_ip, user_agent, path, session_id, user_id, proxy, req_headers, resp_headers)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)"#,
         )
         .bind(r.token_id)
         .bind(r.account_id)
@@ -35,6 +36,14 @@ pub async fn batch_insert_and_rollup(
         .bind(r.status_code as i64)
         .bind(r.duration_ms)
         .bind(&r.error)
+        .bind(&r.client_ip)
+        .bind(&r.user_agent)
+        .bind(&r.path)
+        .bind(&r.session_id)
+        .bind(&r.user_id)
+        .bind(&r.proxy)
+        .bind(&r.req_headers)
+        .bind(&r.resp_headers)
         .execute(&mut *tx)
         .await?;
 
@@ -135,7 +144,8 @@ pub async fn list_logs(
     let list_sql = format!(
         "SELECT id, token_id, account_id, request_id, model, input_tokens, output_tokens, \
          cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, \
-         cache_creation_1h_tokens, stream, status_code, duration_ms, error, created_at \
+         cache_creation_1h_tokens, stream, status_code, duration_ms, error, \
+         client_ip, user_agent, path, session_id, user_id, proxy, req_headers, resp_headers, created_at \
          FROM usage_logs {} ORDER BY id DESC LIMIT {} OFFSET {}",
         where_clause, page_size, offset
     );
@@ -174,6 +184,14 @@ pub async fn list_logs(
             status_code: row.try_get("status_code").unwrap_or(0),
             duration_ms: row.try_get("duration_ms").unwrap_or(0),
             error: row.try_get("error").unwrap_or_default(),
+            client_ip: row.try_get("client_ip").unwrap_or_default(),
+            user_agent: row.try_get("user_agent").unwrap_or_default(),
+            path: row.try_get("path").unwrap_or_default(),
+            session_id: row.try_get("session_id").unwrap_or_default(),
+            user_id: row.try_get("user_id").unwrap_or_default(),
+            proxy: row.try_get("proxy").unwrap_or_default(),
+            req_headers: row.try_get("req_headers").unwrap_or_default(),
+            resp_headers: row.try_get("resp_headers").unwrap_or_default(),
             created_at: row.try_get("created_at").unwrap_or_default(),
         })
         .collect();

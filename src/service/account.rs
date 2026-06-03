@@ -175,6 +175,12 @@ impl AccountService {
         self.cache.release_slot(&key).await;
     }
 
+    /// 读取账号当前并发占用数（实时展示用）。
+    pub async fn get_slot_count(&self, account_id: i64) -> i64 {
+        let key = format!("concurrency:account:{}", account_id);
+        self.cache.get_slot_count(&key).await
+    }
+
     /// 尝试获取 API 令牌维度的并发槽位。
     pub async fn acquire_token_slot(&self, token_id: i64, max: i32) -> Result<bool, AppError> {
         let key = format!("concurrency:token:{}", token_id);
