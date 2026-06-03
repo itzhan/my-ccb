@@ -309,6 +309,13 @@ impl Rewriter {
                     "device_id".into(),
                     serde_json::Value::String(account.device_id.clone()),
                 );
+                // account_uuid 统一成本账号(或留空),避免多人各自的真实账号 UUID 泄漏/不一致
+                if obj.contains_key("account_uuid") {
+                    obj.insert(
+                        "account_uuid".into(),
+                        serde_json::Value::String(account.account_uuid.clone().unwrap_or_default()),
+                    );
+                }
                 let new_str = serde_json::to_string(&uid).unwrap_or_default();
                 if let Some(metadata) =
                     body.get_mut("metadata").and_then(|m| m.as_object_mut())
@@ -431,6 +438,7 @@ impl Rewriter {
         &self,
         headers: &mut [(String, String)],
         account: &Account,
+        model: &str,
     ) {
         let env = self.parse_env(account);
         let os = stainless_os_from_platform(&env.platform);
@@ -445,6 +453,8 @@ impl Rewriter {
         } else {
             env.node_version.as_str()
         };
+        // anthropic-beta 统一成"该版本+该模型"的标准集合,避免 18 种 beta 集泄漏版本差异
+        let beta = beta_header_for_model(model);
         for (k, v) in headers.iter_mut() {
             match k.to_ascii_lowercase().as_str() {
                 "x-stainless-os" => *v = os.to_string(),
@@ -452,6 +462,8 @@ impl Rewriter {
                 "user-agent" => *v = ua.clone(),
                 "x-stainless-package-version" => *v = STAINLESS_PACKAGE_VERSION.to_string(),
                 "x-stainless-runtime-version" => *v = runtime_ver.to_string(),
+                "anthropic-beta" => *v = beta.to_string(),
+                "accept" => *v = "application/json".to_string(),
                 _ => {}
             }
         }

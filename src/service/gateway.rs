@@ -348,7 +348,7 @@ impl GatewayService {
                     self.rewriter.normalize_cc_identity(&mut bm, &account);
                     let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
                     let mut h = passthrough_headers_ordered(&ordered_headers);
-                    self.rewriter.normalize_os_headers_ordered(&mut h, &account);
+                    self.rewriter.normalize_os_headers_ordered(&mut h, &account, &req_model);
                     (fb, h)
                 } else {
                     // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，
