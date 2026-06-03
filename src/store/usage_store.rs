@@ -18,8 +18,8 @@ pub async fn batch_insert_and_rollup(
             r#"INSERT INTO usage_logs
                 (token_id, account_id, request_id, model, input_tokens, output_tokens,
                  cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens,
-                 cache_creation_1h_tokens, stream, status_code, duration_ms)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)"#,
+                 cache_creation_1h_tokens, stream, status_code, duration_ms, error)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
         )
         .bind(r.token_id)
         .bind(r.account_id)
@@ -34,6 +34,7 @@ pub async fn batch_insert_and_rollup(
         .bind(if r.stream { 1i64 } else { 0i64 })
         .bind(r.status_code as i64)
         .bind(r.duration_ms)
+        .bind(&r.error)
         .execute(&mut *tx)
         .await?;
 
@@ -119,7 +120,7 @@ pub async fn list_logs(
     let list_sql = format!(
         "SELECT id, token_id, account_id, request_id, model, input_tokens, output_tokens, \
          cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, \
-         cache_creation_1h_tokens, stream, status_code, duration_ms, created_at \
+         cache_creation_1h_tokens, stream, status_code, duration_ms, error, created_at \
          FROM usage_logs {} ORDER BY id DESC LIMIT {} OFFSET {}",
         where_clause, page_size, offset
     );
@@ -154,6 +155,7 @@ pub async fn list_logs(
             stream: row.try_get::<i64, _>("stream").unwrap_or(0) != 0,
             status_code: row.try_get("status_code").unwrap_or(0),
             duration_ms: row.try_get("duration_ms").unwrap_or(0),
+            error: row.try_get("error").unwrap_or_default(),
             created_at: row.try_get("created_at").unwrap_or_default(),
         })
         .collect();

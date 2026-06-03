@@ -121,6 +121,7 @@ export interface UsageLog {
   stream: boolean;
   status_code: number;
   duration_ms: number;
+  error: string;
   created_at: string;
 }
 

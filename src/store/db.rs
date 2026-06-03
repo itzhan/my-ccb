@@ -137,6 +137,11 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         }
         sqlx::query(stmt).execute(pool).await?;
     }
+    // usage_logs 增量迁移：错误文本列
+    sqlx::query("ALTER TABLE usage_logs ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
     Ok(())
 }
 
@@ -266,6 +271,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     stream                   INTEGER NOT NULL DEFAULT 0,
     status_code              INTEGER NOT NULL DEFAULT 0,
     duration_ms              INTEGER NOT NULL DEFAULT 0,
+    error                    TEXT NOT NULL DEFAULT '',
     created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs(token_id, created_at);
@@ -301,6 +307,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     stream                   BIGINT NOT NULL DEFAULT 0,
     status_code              BIGINT NOT NULL DEFAULT 0,
     duration_ms              BIGINT NOT NULL DEFAULT 0,
+    error                    TEXT NOT NULL DEFAULT '',
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_usage_logs_token_created ON usage_logs(token_id, created_at);

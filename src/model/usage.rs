@@ -16,6 +16,8 @@ pub struct UsageRecord {
     pub stream: bool,
     pub status_code: i32,
     pub duration_ms: i64,
+    /// 失败请求(非 2xx)的上游错误正文(截断)；成功为空。
+    pub error: String,
 }
 
 impl UsageRecord {
@@ -45,6 +47,7 @@ pub struct UsageLogRow {
     pub stream: bool,
     pub status_code: i64,
     pub duration_ms: i64,
+    pub error: String,
     pub created_at: String,
 }
 

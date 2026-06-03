@@ -279,16 +279,23 @@ pub struct RecordMeta {
 pub struct SniffStream<S> {
     inner: S,
     parser: Option<UsageParser>,
+    err_buf: Vec<u8>,
+    is_error: bool,
     recorder: UsageRecorder,
     meta: RecordMeta,
 }
 
+const ERR_CAP: usize = 8192;
+
 impl<S> SniffStream<S> {
     pub fn new(inner: S, recorder: UsageRecorder, meta: RecordMeta) -> Self {
         let is_stream = meta.stream;
+        let is_error = meta.status_code >= 400;
         Self {
             inner,
             parser: Some(UsageParser::new(is_stream)),
+            err_buf: Vec::new(),
+            is_error,
             recorder,
             meta,
         }
@@ -300,6 +307,14 @@ impl<S> SniffStream<S> {
             None => return, // 已记录过
         };
         p.finish();
+        let error = if self.is_error && !self.err_buf.is_empty() {
+            String::from_utf8_lossy(&self.err_buf)
+                .chars()
+                .take(2000)
+                .collect::<String>()
+        } else {
+            String::new()
+        };
         let rec = UsageRecord {
             token_id: self.meta.token_id,
             account_id: self.meta.account_id,
@@ -318,8 +333,10 @@ impl<S> SniffStream<S> {
             stream: self.meta.stream,
             status_code: self.meta.status_code,
             duration_ms: self.meta.started.elapsed().as_millis() as i64,
+            error,
         };
-        if rec.has_usage() {
+        // 成功(有用量)或失败(有错误正文)才记；中途被丢弃且未读 body 的重试不记
+        if rec.has_usage() || !rec.error.is_empty() {
             self.recorder.record(rec);
         }
     }
@@ -336,6 +353,10 @@ where
             Poll::Ready(Some(Ok(b))) => {
                 if let Some(p) = this.parser.as_mut() {
                     p.feed(&b);
+                }
+                if this.is_error && this.err_buf.len() < ERR_CAP {
+                    let take = (ERR_CAP - this.err_buf.len()).min(b.len());
+                    this.err_buf.extend_from_slice(&b[..take]);
                 }
                 Poll::Ready(Some(Ok(b)))
             }

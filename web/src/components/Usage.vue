@@ -184,18 +184,25 @@ onMounted(async () => {
             <tr v-else-if="logs.length === 0">
               <td colspan="10" class="px-4 py-8 text-center text-[#8c8475]">暂无调用记录</td>
             </tr>
-            <tr v-for="r in logs" :key="r.id" class="border-b border-[#f0ebe4] hover:bg-[#faf7f2]">
-              <td class="px-4 py-2.5 text-[#29261e] whitespace-nowrap">{{ new Date(r.created_at).toLocaleString() }}</td>
-              <td class="px-4 py-2.5 text-[#8c8475]">{{ tokenName(r.token_id) }}</td>
-              <td class="px-4 py-2.5 text-[#8c8475]">{{ accountName(r.account_id) }}</td>
-              <td class="px-4 py-2.5 text-[#29261e]">{{ r.model || '-' }}<span v-if="r.stream" class="ml-1 text-[10px] text-[#c4704f]">流</span></td>
-              <td class="px-4 py-2.5 text-right text-[#29261e]">{{ fmt(r.input_tokens) }}</td>
-              <td class="px-4 py-2.5 text-right text-[#29261e]">{{ fmt(r.output_tokens) }}</td>
-              <td class="px-4 py-2.5 text-right text-[#c4704f]">{{ fmt(r.cache_read_tokens) }}</td>
-              <td class="px-4 py-2.5 text-right text-[#c4704f]">{{ fmt(r.cache_creation_tokens) }}</td>
-              <td class="px-4 py-2.5 text-right text-[#8c8475]">{{ r.duration_ms }}ms</td>
-              <td class="px-4 py-2.5 text-right" :class="r.status_code >= 200 && r.status_code < 300 ? 'text-emerald-600' : 'text-red-500'">{{ r.status_code }}</td>
-            </tr>
+            <template v-for="r in logs" :key="r.id">
+              <tr class="border-b border-[#f0ebe4] hover:bg-[#faf7f2]" :class="{ 'border-b-0': r.error }">
+                <td class="px-4 py-2.5 text-[#29261e] whitespace-nowrap">{{ new Date(r.created_at).toLocaleString() }}</td>
+                <td class="px-4 py-2.5 text-[#8c8475]">{{ tokenName(r.token_id) }}</td>
+                <td class="px-4 py-2.5 text-[#8c8475]">{{ accountName(r.account_id) }}</td>
+                <td class="px-4 py-2.5 text-[#29261e]">{{ r.model || '-' }}<span v-if="r.stream" class="ml-1 text-[10px] text-[#c4704f]">流</span></td>
+                <td class="px-4 py-2.5 text-right text-[#29261e]">{{ fmt(r.input_tokens) }}</td>
+                <td class="px-4 py-2.5 text-right text-[#29261e]">{{ fmt(r.output_tokens) }}</td>
+                <td class="px-4 py-2.5 text-right text-[#c4704f]">{{ fmt(r.cache_read_tokens) }}</td>
+                <td class="px-4 py-2.5 text-right text-[#c4704f]">{{ fmt(r.cache_creation_tokens) }}</td>
+                <td class="px-4 py-2.5 text-right text-[#8c8475]">{{ r.duration_ms }}ms</td>
+                <td class="px-4 py-2.5 text-right" :class="r.status_code >= 200 && r.status_code < 300 ? 'text-emerald-600' : 'text-red-500'">{{ r.status_code }}</td>
+              </tr>
+              <tr v-if="r.error" class="border-b border-[#f0ebe4]">
+                <td colspan="10" class="px-4 pb-2.5 pt-0">
+                  <pre class="text-[11px] text-red-500 bg-red-50 rounded-lg px-3 py-2 whitespace-pre-wrap break-all max-h-32 overflow-auto">{{ r.error }}</pre>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
