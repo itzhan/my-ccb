@@ -10,19 +10,61 @@
 //   undici 会【原样保留】传入的 header 顺序与大小写，传输头(Host/Connection/
 //   Accept-Encoding/Content-Length)自动追加到末尾 —— 与真 CC 抓包一字不差。
 //
+// 代理：
+//   - http/https 代理用 undici ProxyAgent
+//   - socks4/socks5 代理用 socks 包建立 TCP 隧道，再由 undici 在隧道上做 TLS
+//     (Bun fetch 不支持 socks)。两种方式都保留 header 顺序，且 TLS 指纹不变。
+//
 // 协议：cc-bridge 用相同的 method/path/query/body 请求本服务，并附带控制头：
 //   x-ccb-upstream : 真正的上游基址，如 https://api.anthropic.com
 //   x-ccb-proxy    : 账号代理(可空)
 //   x-ccb-headers  : base64(JSON [[name,value],...])，要发往上游的【有序】请求头
-// 本服务用 undici 把这些头按原序发往 upstream，并把响应(含 SSE 流)原样回传。
 
-const { request, ProxyAgent, Agent } = require('undici');
+const { request, ProxyAgent, Agent, buildConnector } = require('undici');
+const { SocksClient } = require('socks');
 const { Readable } = require('node:stream');
 
 const PORT = Number(process.env.BUN_SIDECAR_PORT || 8788);
 
-// 复用一个默认 dispatcher(keep-alive)，无代理时用它
+// 无代理时复用的默认 dispatcher(keep-alive)
 const defaultAgent = new Agent();
+// undici 默认 TLS 连接器(socks 隧道建立后用它在已有 socket 上做 TLS)
+const tlsConnect = buildConnector({});
+
+// 按代理 URL 缓存 dispatcher，复用连接池
+const agentCache = new Map();
+
+function dispatcherForProxy(proxy) {
+  if (!proxy) return defaultAgent;
+  let agent = agentCache.get(proxy);
+  if (agent) return agent;
+  agent = /^socks/i.test(proxy) ? makeSocksAgent(proxy) : new ProxyAgent(proxy);
+  agentCache.set(proxy, agent);
+  return agent;
+}
+
+// socks4/socks5 代理：用 socks 建 TCP 隧道，undici 在隧道 socket 上做 TLS。
+function makeSocksAgent(proxyUrl) {
+  const u = new URL(proxyUrl);
+  const type = /socks4/i.test(u.protocol) ? 4 : 5;
+  const proxy = { host: u.hostname, port: Number(u.port) || 1080, type };
+  if (u.username) proxy.userId = decodeURIComponent(u.username);
+  if (u.password) proxy.password = decodeURIComponent(u.password);
+  return new Agent({
+    connect(opts, callback) {
+      SocksClient.createConnection({
+        proxy,
+        command: 'connect',
+        destination: { host: opts.hostname, port: Number(opts.port) || 443 },
+      })
+        .then(({ socket }) => {
+          // 把已建立的隧道 socket 交给 undici 做 TLS(指纹仍是 Bun BoringSSL)
+          tlsConnect({ ...opts, httpSocket: socket }, callback);
+        })
+        .catch((err) => callback(err, null));
+    },
+  });
+}
 
 Bun.serve({
   port: PORT,
@@ -39,11 +81,11 @@ Bun.serve({
     const target = upstream.replace(/\/+$/, '') + url.pathname + url.search;
 
     // 解析有序请求头(cc-bridge 已恢复真实大小写并按真 CC 顺序排好)
-    let orderedHeaders;
     const b64 = req.headers.get('x-ccb-headers');
     if (!b64) {
       return new Response('missing x-ccb-headers', { status: 400 });
     }
+    let orderedHeaders;
     try {
       const pairs = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
       // 用对象保留插入顺序(undici 原样发出)；CC 请求头无重复名
@@ -56,20 +98,13 @@ Bun.serve({
     const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
     const body = hasBody ? Buffer.from(await req.arrayBuffer()) : undefined;
 
-    // socks 代理 undici 不支持，退回 Bun fetch(会丢 header 顺序，仅 socks 账号受影响)
-    if (proxy && /^socks/i.test(proxy)) {
-      return await viaBunFetch(target, req.method, orderedHeaders, body, proxy);
-    }
-
-    const dispatcher = proxy ? new ProxyAgent(proxy) : defaultAgent;
-
     let resp;
     try {
       resp = await request(target, {
         method: req.method,
         headers: orderedHeaders, // undici 原样保留顺序+大小写
         body,
-        dispatcher,
+        dispatcher: dispatcherForProxy(proxy),
         maxRedirections: 0,
       });
     } catch (e) {
@@ -91,21 +126,4 @@ Bun.serve({
   },
 });
 
-// socks 代理回退路径：Bun 原生 fetch(支持 socks，但会重排 header 顺序)
-async function viaBunFetch(target, method, orderedHeaders, body, proxy) {
-  const init = { method, headers: orderedHeaders, redirect: 'manual', proxy };
-  if (body) init.body = body;
-  let resp;
-  try {
-    resp = await fetch(target, init);
-  } catch (e) {
-    return new Response('egress error(socks): ' + (e && e.message ? e.message : e), { status: 502 });
-  }
-  const out = new Headers(resp.headers);
-  out.delete('content-encoding');
-  out.delete('content-length');
-  out.delete('transfer-encoding');
-  return new Response(resp.body, { status: resp.status, headers: out });
-}
-
-console.log('[egress] bun sidecar (undici) listening on 127.0.0.1:' + PORT + ' (bun ' + Bun.version + ')');
+console.log('[egress] bun sidecar (undici+socks) listening on 127.0.0.1:' + PORT + ' (bun ' + Bun.version + ')');
