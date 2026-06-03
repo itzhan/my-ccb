@@ -446,9 +446,13 @@ impl Rewriter {
         let pe = self.parse_prompt_env(account);
         let (vuser, vgit) = account.effective_virtual_identity();
 
-        let darwin = pe.platform == "darwin";
-        let home_plain = format!("{}{}", if darwin { "/Users/" } else { "/home/" }, vuser);
-        let home_slug = format!("{}{}", if darwin { "-Users-" } else { "-home-" }, vuser);
+        // 按账号虚拟 OS 决定 home 前缀形态（darwin/win32 用 Users，linux 用 home）
+        let home_plain = match pe.platform.as_str() {
+            "win32" => format!("C:\\Users\\{}", vuser),
+            "linux" => format!("/home/{}", vuser),
+            _ => format!("/Users/{}", vuser),
+        };
+        let home_slug = format!("{}{}", if pe.platform == "linux" { "-home-" } else { "-Users-" }, vuser);
         let git_repl = format!("Git user: {}", vgit);
         let plat_repl = format!("Platform: {}", pe.platform);
         let shell_repl = format!("Shell: {}", pe.shell);
@@ -458,6 +462,7 @@ impl Rewriter {
             let mut t = HOME_PLAIN_REGEX
                 .replace_all(text, home_plain.as_str())
                 .to_string();
+            t = HOME_WIN_REGEX.replace_all(&t, home_plain.as_str()).to_string();
             t = HOME_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
             t = GIT_USER_REGEX.replace_all(&t, git_repl.as_str()).to_string();
             t = PLATFORM_REGEX.replace_all(&t, plat_repl.as_str()).to_string();
@@ -819,6 +824,9 @@ static HOME_PLAIN_REGEX: Lazy<Regex> =
 /// home 路径 slug 形态 -Users-<name> 或 -home-<name>（出现在 .claude/projects 的目录名里）
 static HOME_SLUG_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(-(?:Users|home)-)([^-\s"/<]+)"#).unwrap());
+/// Windows home 路径 C:\Users\<name>（解析后的字符串里是单反斜杠）
+static HOME_WIN_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"([A-Za-z]:\\Users\\)([^\\/\s"<]+)"#).unwrap());
 static SYSTEM_REMINDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<system-reminder>(.*?)</system-reminder>").unwrap());
 
