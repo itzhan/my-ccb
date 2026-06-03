@@ -117,6 +117,9 @@ impl AccountStore {
             },
             usage_data: Self::parse_json(row, "usage_data"),
             usage_fetched_at: Self::parse_optional_time(row, "usage_fetched_at"),
+            identity_mode: row.try_get::<String, _>("identity_mode").unwrap_or_default(),
+            virtual_user: row.try_get::<String, _>("virtual_user").unwrap_or_default(),
+            virtual_git_name: row.try_get::<String, _>("virtual_git_name").unwrap_or_default(),
             created_at: Self::parse_time(row, "created_at"),
             updated_at: Self::parse_time(row, "updated_at"),
         }
@@ -153,8 +156,9 @@ impl AccountStore {
                 auth_type, access_token, refresh_token, oauth_expires_at, oauth_refreshed_at, auth_error,
                 device_id, canonical_env, canonical_prompt_env, canonical_process,
                 billing_mode, account_uuid, organization_uuid, subscription_type,
-                concurrency, priority, auto_telemetry, rpm_limit)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+                concurrency, priority, auto_telemetry, rpm_limit,
+                identity_mode, virtual_user, virtual_git_name)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
             RETURNING id, created_at, updated_at"#,
             self.ts(9), self.ts(10), "$11"
         );
@@ -182,6 +186,9 @@ impl AccountStore {
         .bind(a.priority)
         .bind(auto_telemetry_int)
         .bind(rpm_limit_val)
+        .bind(&a.identity_mode)
+        .bind(&a.virtual_user)
+        .bind(&a.virtual_git_name)
         .fetch_one(&self.pool)
         .await?;
 
@@ -201,8 +208,9 @@ impl AccountStore {
                 auth_type=$5, access_token=$6, refresh_token=$7, oauth_expires_at={}, oauth_refreshed_at={},
                 auth_error=$10, proxy_url=$11, billing_mode=$12,
                 account_uuid=$13, organization_uuid=$14, subscription_type=$15,
-                concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19, updated_at={}
-            WHERE id=$20"#,
+                concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19,
+                identity_mode=$20, virtual_user=$21, virtual_git_name=$22, updated_at={}
+            WHERE id=$23"#,
             self.ts(8), self.ts(9), self.now_expr()
         );
         sqlx::query(&q)
@@ -225,6 +233,9 @@ impl AccountStore {
             .bind(a.priority)
             .bind(auto_telemetry_int)
             .bind(rpm_limit_val)
+            .bind(&a.identity_mode)
+            .bind(&a.virtual_user)
+            .bind(&a.virtual_git_name)
             .bind(a.id)
             .execute(&self.pool)
             .await?;
@@ -451,7 +462,8 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     billing_mode, account_uuid, organization_uuid, subscription_type,
     concurrency, priority, rate_limited_at, rate_limit_reset_at,
     disable_reason, auto_telemetry, telemetry_count, rpm_limit,
-    usage_data, usage_fetched_at, created_at, updated_at"#;
+    usage_data, usage_fetched_at, identity_mode, virtual_user, virtual_git_name,
+    created_at, updated_at"#;
 
 #[cfg(test)]
 mod tests {

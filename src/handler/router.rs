@@ -162,6 +162,17 @@ async fn list_accounts(
         if a.rpm_limit.map(|v| v > 0).unwrap_or(false) {
             obj["current_rpm"] = serde_json::json!(rpm_counts.get(&a.id).copied().unwrap_or(0));
         }
+        // 该账号当前呈现的虚拟身份（自定义优先，留空则派生）+ 机器指纹，供详情展示
+        let (vuser, vgit) = a.effective_virtual_identity();
+        let env: crate::model::account::CanonicalEnvData =
+            serde_json::from_value(a.canonical_env.clone()).unwrap_or_default();
+        obj["effective_identity"] = serde_json::json!({
+            "device_id": a.device_id,
+            "virtual_user": vuser,
+            "git_name": vgit,
+            "platform": env.platform,
+            "arch": env.arch,
+        });
         data.push(obj);
     }
 
@@ -193,6 +204,9 @@ struct CreateAccountRequest {
     priority: Option<i32>,
     auto_telemetry: Option<bool>,
     rpm_limit: Option<i32>,
+    identity_mode: Option<String>,
+    virtual_user: Option<String>,
+    virtual_git_name: Option<String>,
 }
 
 async fn create_account(
@@ -241,6 +255,9 @@ async fn create_account(
         rpm_limit: req.rpm_limit.filter(|&v| v > 0),
         usage_data: serde_json::json!({}),
         usage_fetched_at: None,
+        identity_mode: req.identity_mode.unwrap_or_default(),
+        virtual_user: req.virtual_user.unwrap_or_default(),
+        virtual_git_name: req.virtual_git_name.unwrap_or_default(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -310,6 +327,15 @@ async fn update_account(
         if priority > 0 {
             existing.priority = priority as i32;
         }
+    }
+    if let Some(v) = updates.get("identity_mode").and_then(|v| v.as_str()) {
+        existing.identity_mode = v.to_string();
+    }
+    if let Some(v) = updates.get("virtual_user").and_then(|v| v.as_str()) {
+        existing.virtual_user = v.to_string();
+    }
+    if let Some(v) = updates.get("virtual_git_name").and_then(|v| v.as_str()) {
+        existing.virtual_git_name = v.to_string();
     }
     if let Some(status) = updates.get("status").and_then(|v| v.as_str()) {
         if !status.is_empty() {

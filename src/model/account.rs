@@ -193,6 +193,15 @@ pub struct Account {
     pub usage_data: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_fetched_at: Option<DateTime<Utc>>,
+    /// 身份模式：passthrough（默认，原样透传）/ normalize（多人共号，归一化为虚拟身份）。
+    #[serde(default)]
+    pub identity_mode: String,
+    /// normalize 模式下的虚拟用户名（home 目录名；留空则按账号自动派生）。
+    #[serde(default)]
+    pub virtual_user: String,
+    /// normalize 模式下的虚拟 git 用户名（留空则按账号自动派生）。
+    #[serde(default)]
+    pub virtual_git_name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -201,6 +210,32 @@ fn default_concurrency() -> i32 { 3 }
 fn default_priority() -> i32 { 50 }
 
 impl Account {
+    /// 是否启用 normalize 身份归一化。
+    pub fn identity_normalize(&self) -> bool {
+        self.identity_mode == "normalize"
+    }
+
+    /// 该账号生效的虚拟身份 (虚拟用户名, 虚拟 git 名)：优先自定义值，留空则按账号稳定派生。
+    pub fn effective_virtual_identity(&self) -> (String, String) {
+        let seed = if self.email.is_empty() {
+            self.id.to_string()
+        } else {
+            self.email.clone()
+        };
+        let derived = crate::model::identity::virtual_identity(&seed);
+        let user = if self.virtual_user.trim().is_empty() {
+            derived.user
+        } else {
+            self.virtual_user.trim().to_string()
+        };
+        let git = if self.virtual_git_name.trim().is_empty() {
+            derived.git_name
+        } else {
+            self.virtual_git_name.trim().to_string()
+        };
+        (user, git)
+    }
+
     pub fn is_schedulable(&self) -> bool {
         if self.status != AccountStatus::Active {
             return false;

@@ -220,7 +220,10 @@ impl GatewayService {
 
             // 构建转发请求
             let (final_body, mut final_headers) = if client_type == ClientType::ClaudeCode {
-                if self.identity_normalize {
+                // 每账号自己的 identity_mode 优先；账号未设置时回退到全局默认。
+                let normalize = account.identity_normalize()
+                    || (account.identity_mode.is_empty() && self.identity_normalize);
+                if normalize {
                     // 多人共号：把"是谁/哪台机器"归一化成账号固定虚拟身份，
                     // 让一个号始终像同一个人。其余仍尽量保真。
                     let mut bm: serde_json::Value =

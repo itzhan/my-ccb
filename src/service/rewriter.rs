@@ -444,17 +444,12 @@ impl Rewriter {
     /// 不动项目子路径和对话内容（真人本就会在多个项目里干活）。
     pub fn normalize_cc_identity(&self, body: &mut serde_json::Value, account: &Account) {
         let pe = self.parse_prompt_env(account);
-        let seed = if account.email.is_empty() {
-            account.id.to_string()
-        } else {
-            account.email.clone()
-        };
-        let vid = crate::model::identity::virtual_identity(&seed);
+        let (vuser, vgit) = account.effective_virtual_identity();
 
         let darwin = pe.platform == "darwin";
-        let home_plain = format!("{}{}", if darwin { "/Users/" } else { "/home/" }, vid.user);
-        let home_slug = format!("{}{}", if darwin { "-Users-" } else { "-home-" }, vid.user);
-        let git_repl = format!("Git user: {}", vid.git_name);
+        let home_plain = format!("{}{}", if darwin { "/Users/" } else { "/home/" }, vuser);
+        let home_slug = format!("{}{}", if darwin { "-Users-" } else { "-home-" }, vuser);
+        let git_repl = format!("Git user: {}", vgit);
         let plat_repl = format!("Platform: {}", pe.platform);
         let shell_repl = format!("Shell: {}", pe.shell);
         let os_repl = format!("OS Version: {}", pe.os_version);
