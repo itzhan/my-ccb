@@ -1,18 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
+import AuroraBackground from '@/components/inspira/AuroraBackground.vue';
 import { login } from '../router';
 
-/** 密码输入值 */
 const password = ref('');
-/** 错误信息 */
 const error = ref('');
-/** 登录请求加载状态 */
 const loading = ref(false);
 
-/** 提交登录表单 */
 async function submit() {
   if (!password.value.trim()) {
     error.value = '请输入密码';
@@ -31,40 +26,48 @@ async function submit() {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center px-4">
-    <Card class="w-full max-w-sm bg-white border-[#e8e2d9] rounded-2xl shadow-lg shadow-black/5">
-      <CardHeader class="text-center pb-2">
-        <div class="flex justify-center mb-2">
-          <img src="/favicon.svg" alt="Logo" class="w-10 h-10" />
-        </div>
-        <CardTitle class="text-2xl font-semibold text-[#29261e] tracking-tight">Claude Code Gateway</CardTitle>
-        <p class="text-[#8c8475] text-sm mt-1">管理控制台</p>
-      </CardHeader>
-      <CardContent>
-        <form @submit.prevent="submit" class="space-y-4">
-          <div>
-            <Input
-              v-model="password"
-              type="password"
-              placeholder="管理员密码"
-              class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20 h-11"
-            />
-          </div>
-          <p
-            v-if="error"
-            class="text-red-500 text-sm text-center"
+  <AuroraBackground>
+    <div class="relative z-10 w-full max-w-sm px-4">
+      <div
+        class="rounded-3xl border border-white/50 bg-white/70 backdrop-blur-xl shadow-2xl shadow-[#c4704f]/10 p-8"
+      >
+        <!-- 品牌头部 -->
+        <div class="flex flex-col items-center mb-7">
+          <div
+            class="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#c4704f] to-[#e0a878] flex items-center justify-center shadow-lg shadow-[#c4704f]/30 mb-4 ring-1 ring-white/40"
           >
-            {{ error }}
-          </p>
-          <Button
+            <img src="/favicon.svg" alt="Logo" class="w-9 h-9" />
+          </div>
+          <h1 class="text-2xl font-semibold tracking-tight text-[#29261e]">Claude Code Gateway</h1>
+          <p class="text-sm text-[#8c8475] mt-1.5">管理控制台</p>
+        </div>
+
+        <form @submit.prevent="submit" class="space-y-4">
+          <Input
+            v-model="password"
+            type="password"
+            placeholder="管理员密码"
+            class="bg-white/60 border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20 h-11 rounded-xl"
+          />
+          <p v-if="error" class="text-red-500 text-sm text-center">{{ error }}</p>
+
+          <!-- 渐变 + 微光按钮 -->
+          <button
             type="submit"
             :disabled="loading"
-            class="w-full bg-[#c4704f] hover:bg-[#b5623f] text-white font-medium h-11 rounded-xl transition-all duration-200 hover:shadow-md"
+            class="group relative w-full h-11 overflow-hidden rounded-xl bg-gradient-to-r from-[#c4704f] to-[#b5623f] text-white font-medium shadow-lg shadow-[#c4704f]/25 transition-all duration-200 hover:shadow-xl hover:shadow-[#c4704f]/35 disabled:opacity-60"
           >
-            {{ loading ? '登录中...' : '登录' }}
-          </Button>
+            <span
+              class="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent transition-transform duration-700 group-hover:translate-x-full"
+            />
+            <span class="relative">{{ loading ? '登录中…' : '登录' }}</span>
+          </button>
         </form>
-      </CardContent>
-    </Card>
-  </div>
+
+        <p class="text-center text-xs text-[#b5b0a6] mt-6">
+          多账号 · 负载均衡 · 指纹对齐
+        </p>
+      </div>
+    </div>
+  </AuroraBackground>
 </template>
