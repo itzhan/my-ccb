@@ -30,6 +30,10 @@ pub struct AppState {
     pub oauth_flow_svc: Arc<OAuthFlowService>,
     pub telemetry_svc: Arc<TelemetryService>,
     pub admin_password: String,
+    /// 运行时可改的客户端限制级别（与网关共享）。
+    pub client_restriction: Arc<std::sync::RwLock<crate::service::client_guard::ClientRestriction>>,
+    /// 数据库连接池（设置持久化用）。
+    pub pool: sqlx::AnyPool,
 }
 
 pub fn build_router(
@@ -40,6 +44,8 @@ pub fn build_router(
     token_store: Arc<TokenStore>,
     oauth_flow_svc: Arc<OAuthFlowService>,
     telemetry_svc: Arc<TelemetryService>,
+    client_restriction: Arc<std::sync::RwLock<crate::service::client_guard::ClientRestriction>>,
+    pool: sqlx::AnyPool,
 ) -> Router {
     let state = AppState {
         gateway_svc,
@@ -49,6 +55,8 @@ pub fn build_router(
         oauth_flow_svc,
         telemetry_svc,
         admin_password: cfg.admin.password.clone(),
+        client_restriction,
+        pool,
     };
 
     let admin_password = state.admin_password.clone();
@@ -57,7 +65,8 @@ pub fn build_router(
     let frontend_routes = Router::new()
         .route("/", get(spa_handler))
         .route("/login", get(spa_handler))
-        .route("/tokens", get(spa_handler));
+        .route("/tokens", get(spa_handler))
+        .route("/settings", get(spa_handler));
 
     // 前端静态资源
     let asset_routes = Router::new()
@@ -79,6 +88,7 @@ pub fn build_router(
             put(update_token).delete(delete_token_handler),
         )
         .route("/admin/dashboard", get(get_dashboard))
+        .route("/admin/settings", get(get_settings).put(update_settings))
         .route("/admin/oauth/generate-auth-url", post(oauth_generate_auth_url))
         .route("/admin/oauth/generate-setup-token-url", post(oauth_generate_setup_token_url))
         .route("/admin/oauth/exchange-code", post(oauth_exchange_code))
@@ -577,6 +587,38 @@ async fn get_dashboard(
         },
         "tokens": token_count,
     })))
+}
+
+// --- Settings ---
+
+async fn get_settings(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let cr = state
+        .client_restriction
+        .read()
+        .map(|g| g.as_str())
+        .unwrap_or("off");
+    Json(serde_json::json!({ "client_restriction": cr }))
+}
+
+async fn update_settings(
+    State(state): State<AppState>,
+    Json(updates): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if let Some(v) = updates.get("client_restriction").and_then(|v| v.as_str()) {
+        let parsed = crate::service::client_guard::ClientRestriction::from_env(v);
+        crate::store::db::set_setting(&state.pool, "client_restriction", parsed.as_str())
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if let Ok(mut g) = state.client_restriction.write() {
+            *g = parsed;
+        }
+    }
+    let cr = state
+        .client_restriction
+        .read()
+        .map(|g| g.as_str())
+        .unwrap_or("off");
+    Ok(Json(serde_json::json!({ "client_restriction": cr })))
 }
 
 // --- OAuth Flow Handlers ---

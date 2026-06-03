@@ -33,6 +33,14 @@ async fn main() {
         .await
         .expect("migrate failed");
 
+    // 运行时可改的客户端限制：优先 DB 设置，回退 env 默认
+    let cr_init = store::db::get_setting(&pool, "client_restriction")
+        .await
+        .unwrap_or_else(|| cfg.client_restriction.clone());
+    let client_restriction = std::sync::Arc::new(std::sync::RwLock::new(
+        service::client_guard::ClientRestriction::from_env(&cr_init),
+    ));
+
     // 缓存：优先 Redis，回退内存
     let cache: Arc<dyn store::cache::CacheStore> = match &cfg.redis {
         Some(redis_cfg) => {
@@ -76,7 +84,7 @@ async fn main() {
         account_svc.clone(),
         rewriter.clone(),
         telemetry_svc.clone(),
-        service::client_guard::ClientRestriction::from_env(&cfg.client_restriction),
+        client_restriction.clone(),
         cfg.identity_mode == "normalize",
     ));
     let token_tester = Arc::new(service::oauth::TokenTester::new());
@@ -100,6 +108,8 @@ async fn main() {
         token_store,
         oauth_flow_svc,
         telemetry_svc,
+        client_restriction,
+        pool.clone(),
     );
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);

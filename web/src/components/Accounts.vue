@@ -48,6 +48,9 @@ const form = ref({
   priority: 50,
   auto_telemetry: false,
   rpm_limit: 0,
+  identity_mode: 'passthrough',
+  virtual_user: '',
+  virtual_git_name: '',
 });
 /** 正在测试的账号 ID */
 const testing = ref<number | null>(null);
@@ -125,6 +128,9 @@ function openCreate() {
     priority: 50,
     auto_telemetry: false,
     rpm_limit: 0,
+    identity_mode: 'passthrough',
+    virtual_user: '',
+    virtual_git_name: '',
   };
   showForm.value = true;
 }
@@ -152,6 +158,9 @@ function openEdit(a: Account) {
     priority: a.priority,
     auto_telemetry: a.auto_telemetry ?? false,
     rpm_limit: a.rpm_limit || 0,
+    identity_mode: a.identity_mode || 'passthrough',
+    virtual_user: a.virtual_user || '',
+    virtual_git_name: a.virtual_git_name || '',
   };
   showForm.value = true;
 }
@@ -188,6 +197,9 @@ async function save() {
       updates.priority = form.value.priority;
       updates.auto_telemetry = form.value.auto_telemetry;
       updates.rpm_limit = form.value.rpm_limit || 0;
+      updates.identity_mode = form.value.identity_mode;
+      updates.virtual_user = form.value.virtual_user;
+      updates.virtual_git_name = form.value.virtual_git_name;
       await api.updateAccount(editing.value.id, updates);
     } else {
       if (form.value.auth_type === 'setup_token' && !form.value.setup_token.trim()) {
@@ -212,6 +224,9 @@ async function save() {
         priority: form.value.priority,
         auto_telemetry: form.value.auto_telemetry,
         rpm_limit: form.value.rpm_limit || 0,
+        identity_mode: form.value.identity_mode,
+        virtual_user: form.value.virtual_user,
+        virtual_git_name: form.value.virtual_git_name,
       };
       if (expiresAt) payload.expires_at = Number(expiresAt);
       await api.createAccount(payload);
@@ -510,6 +525,9 @@ function applyOAuthResult() {
     priority: 50,
     auto_telemetry: false,
     rpm_limit: 0,
+    identity_mode: 'passthrough',
+    virtual_user: '',
+    virtual_git_name: '',
   };
   showForm.value = true;
 }
@@ -638,6 +656,13 @@ async function copyText(text: string) {
               <div>
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">认证方式</p>
                 <p class="text-sm text-[#8c8475] truncate">{{ authTypeLabel(a.auth_type) }}</p>
+              </div>
+              <div>
+                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">身份模拟</p>
+                <p class="text-sm truncate" :class="a.identity_mode === 'normalize' ? 'text-emerald-600' : 'text-[#8c8475]'">
+                  {{ a.identity_mode === 'normalize' ? '归一化' : '透传' }}
+                  <span v-if="a.identity_mode === 'normalize' && a.effective_identity" class="text-[#b5b0a6] text-xs">· {{ a.effective_identity.virtual_user }}</span>
+                </p>
               </div>
               <div>
                 <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">自动遥测</p>
@@ -1094,6 +1119,68 @@ async function copyText(text: string) {
               placeholder="0"
               class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
             />
+          </div>
+
+          <!-- 身份模拟 -->
+          <div class="space-y-2 pt-2 border-t border-[#f0ebe4]">
+            <Label class="text-[#5c5647] text-sm">身份模拟</Label>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                @click="form.identity_mode = 'passthrough'"
+                class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all"
+                :class="form.identity_mode === 'passthrough'
+                  ? 'bg-[#c4704f]/10 border-[#c4704f] text-[#c4704f]'
+                  : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-[#c4704f]/40'"
+              >
+                透传（单人）
+              </button>
+              <button
+                type="button"
+                @click="form.identity_mode = 'normalize'"
+                class="flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-all"
+                :class="form.identity_mode === 'normalize'
+                  ? 'bg-emerald-50 border-emerald-400 text-emerald-600'
+                  : 'bg-[#f9f6f1] border-[#e8e2d9] text-[#8c8475] hover:border-emerald-300'"
+              >
+                归一化（多人共号）
+              </button>
+            </div>
+            <p class="text-xs text-[#b5b0a6]">
+              {{ form.identity_mode === 'normalize'
+                ? '多人共号：把每个用户的 home用户名/git/OS/device_id 统一成下面这套虚拟身份，让一个号始终像同一个人。'
+                : '单人：客户端请求原样透传，最高保真（推荐你自己用）。' }}
+            </p>
+
+            <!-- normalize 时可编辑虚拟身份 -->
+            <div v-if="form.identity_mode === 'normalize'" class="grid grid-cols-2 gap-3 pt-1">
+              <div class="space-y-1">
+                <Label class="text-[#5c5647] text-xs">虚拟用户名（留空自动派生）</Label>
+                <Input
+                  v-model="form.virtual_user"
+                  placeholder="如 alexc"
+                  class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+                />
+              </div>
+              <div class="space-y-1">
+                <Label class="text-[#5c5647] text-xs">虚拟 git 用户名（留空自动派生）</Label>
+                <Input
+                  v-model="form.virtual_git_name"
+                  placeholder="如 Alex Carter"
+                  class="bg-[#f9f6f1] border-[#e8e2d9] text-[#29261e] placeholder-[#b5b0a6] focus:border-[#c4704f] focus:ring-[#c4704f]/20"
+                />
+              </div>
+            </div>
+
+            <!-- 编辑时显示该账号当前生效的虚拟身份 -->
+            <div
+              v-if="editing && editing.effective_identity"
+              class="rounded-lg bg-[#f9f6f1] border border-[#e8e2d9] p-3 text-xs text-[#8c8475] space-y-1"
+            >
+              <p class="font-medium text-[#5c5647]">当前生效的虚拟身份</p>
+              <p>虚拟用户：<span class="font-mono text-[#29261e]">{{ editing.effective_identity.virtual_user }}</span> · git：<span class="font-mono text-[#29261e]">{{ editing.effective_identity.git_name }}</span></p>
+              <p>机器：{{ editing.effective_identity.platform }} / {{ editing.effective_identity.arch }} · device_id：<span class="font-mono">{{ editing.effective_identity.device_id.slice(0, 16) }}…</span></p>
+            </div>
           </div>
 
           <DialogFooter class="gap-2 pt-2">

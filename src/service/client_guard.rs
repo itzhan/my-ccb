@@ -27,6 +27,14 @@ impl ClientRestriction {
             _ => Self::Off,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Ua => "ua",
+            Self::Strict => "strict",
+        }
+    }
 }
 
 /// User-Agent 匹配 `claude-code/x.x.x` 或 `claude-cli/x.x.x`（大小写不敏感）。

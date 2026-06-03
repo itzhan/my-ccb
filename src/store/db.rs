@@ -112,6 +112,12 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         }
         sqlx::query(stmt).execute(pool).await?;
     }
+    // settings 键值表（运行时可改的全局设置）
+    sqlx::query("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '')")
+        .execute(pool)
+        .await
+        .ok();
+
     // api_tokens 增量迁移
     sqlx::query("ALTER TABLE api_tokens ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 0")
         .execute(pool)
@@ -121,6 +127,28 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
+    Ok(())
+}
+
+/// 读取一个全局设置项。
+pub async fn get_setting(pool: &AnyPool, key: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key=$1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// 写入一个全局设置项（upsert）。
+pub async fn set_setting(pool: &AnyPool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

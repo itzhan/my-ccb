@@ -60,6 +60,16 @@ export interface Account {
   current_rpm?: number | null
   usage_data?: UsageData
   usage_fetched_at?: string
+  identity_mode?: string
+  virtual_user?: string
+  virtual_git_name?: string
+  effective_identity?: {
+    device_id: string
+    virtual_user: string
+    git_name: string
+    platform: string
+    arch: string
+  }
   created_at: string
   updated_at: string
 }
@@ -131,6 +141,9 @@ export const api = {
   updateToken: (id: number, t: Partial<ApiToken>) => request<ApiToken>('PUT', `/admin/tokens/${id}`, t),
   deleteToken: (id: number) => request<void>('DELETE', `/admin/tokens/${id}`),
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),
+  getSettings: () => request<{ client_restriction: string }>('GET', '/admin/settings'),
+  updateSettings: (s: { client_restriction?: string }) =>
+    request<{ client_restriction: string }>('PUT', '/admin/settings', s),
 
   generateAuthUrl: (proxyUrl?: string) =>
     request<OAuthGenerateResult>('POST', '/admin/oauth/generate-auth-url', { proxy_url: proxyUrl || null }),

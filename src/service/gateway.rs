@@ -32,8 +32,9 @@ pub struct GatewayService {
     account_svc: Arc<AccountService>,
     rewriter: Arc<Rewriter>,
     telemetry_svc: Arc<TelemetryService>,
-    client_restriction: ClientRestriction,
-    /// 多人共号身份归一化：CC 客户端请求改写成账号固定虚拟身份。
+    /// 运行时可改的客户端限制级别（设置页可切换）。
+    client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
+    /// 多人共号身份归一化的全局默认（账号未单独设置时回退）。
     identity_normalize: bool,
 }
 
@@ -42,7 +43,7 @@ impl GatewayService {
         account_svc: Arc<AccountService>,
         rewriter: Arc<Rewriter>,
         telemetry_svc: Arc<TelemetryService>,
-        client_restriction: ClientRestriction,
+        client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
         identity_normalize: bool,
     ) -> Self {
         Self {
@@ -83,8 +84,13 @@ impl GatewayService {
             serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}))
         };
 
-        // 客户端限制：非真实 Claude Code 客户端直接拒绝
-        if !client_guard::validate(self.client_restriction, &path, &headers, &body_map) {
+        // 客户端限制：非真实 Claude Code 客户端直接拒绝（运行时可改）
+        let restriction = self
+            .client_restriction
+            .read()
+            .map(|g| *g)
+            .unwrap_or(ClientRestriction::Off);
+        if !client_guard::validate(restriction, &path, &headers, &body_map) {
             warn!("client restriction rejected request: ua=\"{}\" path={}", ua, path);
             return Err(AppError::Forbidden("client not allowed".into()));
         }
