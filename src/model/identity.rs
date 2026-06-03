@@ -55,22 +55,6 @@ fn env_presets() -> Vec<CanonicalEnvData> {
             vcs: "git".into(),
             ..Default::default()
         },
-        CanonicalEnvData {
-            platform: "win32".into(),
-            platform_raw: "win32".into(),
-            arch: "x64".into(),
-            node_version: "v24.3.0".into(),
-            terminal: "Windows Terminal".into(),
-            package_managers: "npm,pnpm".into(),
-            runtimes: "node".into(),
-            is_claude_ai_auth: true,
-            version: "2.1.156".into(),
-            version_base: "2.1.156".into(),
-            build_time: "2026-03-20T21:26:18Z".into(),
-            deployment_environment: "unknown-win32".into(),
-            vcs: "git".into(),
-            ..Default::default()
-        },
     ]
 }
 
@@ -92,15 +76,6 @@ fn prompt_presets() -> HashMap<&'static str, CanonicalPromptEnvData> {
             shell: "bash".into(),
             os_version: "Linux 6.5.0-generic".into(),
             working_dir: "/home/user/projects".into(),
-        },
-    );
-    m.insert(
-        "win32",
-        CanonicalPromptEnvData {
-            platform: "win32".into(),
-            shell: "powershell.exe".into(),
-            os_version: "Windows_NT 10.0.26100".into(),
-            working_dir: "C:\\Users\\user\\projects".into(),
         },
     );
     m

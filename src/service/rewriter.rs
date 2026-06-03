@@ -446,23 +446,42 @@ impl Rewriter {
         let pe = self.parse_prompt_env(account);
         let (vuser, vgit) = account.effective_virtual_identity();
 
-        // 按账号虚拟 OS 决定 home 前缀形态（darwin/win32 用 Users，linux 用 home）
-        let home_plain = match pe.platform.as_str() {
-            "win32" => format!("C:\\Users\\{}", vuser),
-            "linux" => format!("/home/{}", vuser),
-            _ => format!("/Users/{}", vuser),
+        // 虚拟环境只有 Mac/Linux。home 前缀按账号 OS（linux→/home，否则 /Users）。
+        let home_plain = if pe.platform == "linux" {
+            format!("/home/{}", vuser)
+        } else {
+            format!("/Users/{}", vuser)
         };
-        let home_slug = format!("{}{}", if pe.platform == "linux" { "-home-" } else { "-Users-" }, vuser);
+        let home_slug = format!(
+            "{}{}",
+            if pe.platform == "linux" { "-home-" } else { "-Users-" },
+            vuser
+        );
         let git_repl = format!("Git user: {}", vgit);
         let plat_repl = format!("Platform: {}", pe.platform);
         let shell_repl = format!("Shell: {}", pe.shell);
         let os_repl = format!("OS Version: {}", pe.os_version);
 
         let scrub = |text: &str| -> String {
-            let mut t = HOME_PLAIN_REGEX
-                .replace_all(text, home_plain.as_str())
+            // Windows 整条路径 C:\Users\bob\dev\app → /Users/vuser/dev/app
+            //（去盘符、反斜杠转正斜杠、首段用户名替换为虚拟用户名）
+            let mut t = HOME_WIN_FULL_REGEX
+                .replace_all(text, |caps: &regex::Captures| {
+                    let rest = &caps[1]; // bob\dev\app
+                    let mut segs = rest.split('\\');
+                    segs.next(); // 丢弃原用户名段
+                    let sub: Vec<&str> = segs.filter(|s| !s.is_empty()).collect();
+                    if sub.is_empty() {
+                        home_plain.clone()
+                    } else {
+                        format!("{}/{}", home_plain, sub.join("/"))
+                    }
+                })
                 .to_string();
-            t = HOME_WIN_REGEX.replace_all(&t, home_plain.as_str()).to_string();
+            // Windows memory slug C--Users-bob → -Users-vuser（去盘符）
+            t = WIN_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
+            // Unix home 明文 + slug
+            t = HOME_PLAIN_REGEX.replace_all(&t, home_plain.as_str()).to_string();
             t = HOME_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
             t = GIT_USER_REGEX.replace_all(&t, git_repl.as_str()).to_string();
             t = PLATFORM_REGEX.replace_all(&t, plat_repl.as_str()).to_string();
@@ -824,9 +843,12 @@ static HOME_PLAIN_REGEX: Lazy<Regex> =
 /// home 路径 slug 形态 -Users-<name> 或 -home-<name>（出现在 .claude/projects 的目录名里）
 static HOME_SLUG_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(-(?:Users|home)-)([^-\s"/<]+)"#).unwrap());
-/// Windows home 路径 C:\Users\<name>（解析后的字符串里是单反斜杠）
-static HOME_WIN_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"([A-Za-z]:\\Users\\)([^\\/\s"<]+)"#).unwrap());
+/// Windows home 整条路径 C:\Users\<name>\<子路径>（捕获 Users 之后的部分，用于整体转成 Unix 风格）
+static HOME_WIN_FULL_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"[A-Za-z]:\\Users\\([^"\s<>\n]*)"#).unwrap());
+/// Windows memory slug 形态 C--Users-<name>（带盘符前缀），转成 Unix slug
+static WIN_SLUG_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"[A-Za-z]--Users-([^-\s"/<]+)"#).unwrap());
 static SYSTEM_REMINDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<system-reminder>(.*?)</system-reminder>").unwrap());
 
