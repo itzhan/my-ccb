@@ -20,8 +20,11 @@ const accounts = ref<Account[]>([]);
 const tokens = ref<ApiToken[]>([]);
 const filterAccount = ref<number | ''>('');
 const filterToken = ref<number | ''>('');
+const filterModel = ref('');
+const filterResult = ref('');
 const filterStart = ref('');
 const filterEnd = ref('');
+const models = ref<string[]>([]);
 
 const accountName = (id: number) => accounts.value.find(a => a.id === id)?.name || (id ? `#${id}` : '-');
 const tokenName = (id: number) => tokens.value.find(t => t.id === id)?.name || (id ? `#${id}` : '-');
@@ -59,6 +62,8 @@ async function loadLogs() {
       page_size: pageSize,
       account_id: filterAccount.value === '' ? undefined : Number(filterAccount.value),
       token_id: filterToken.value === '' ? undefined : Number(filterToken.value),
+      model: filterModel.value || undefined,
+      result: filterResult.value || undefined,
       start: filterStart.value ? `${filterStart.value}T00:00:00Z` : undefined,
       end: filterEnd.value ? `${filterEnd.value}T23:59:59Z` : undefined,
     });
@@ -80,6 +85,8 @@ function applyFilter() {
 function resetFilter() {
   filterAccount.value = '';
   filterToken.value = '';
+  filterModel.value = '';
+  filterResult.value = '';
   filterStart.value = '';
   filterEnd.value = '';
   page.value = 1;
@@ -92,12 +99,22 @@ function go(p: number) {
   loadLogs();
 }
 
+async function loadModels() {
+  try {
+    const res = await api.getUsageStats({ group_by: 'model' });
+    models.value = (res.data ?? []).map(d => d.key).filter(Boolean);
+  } catch {
+    models.value = [];
+  }
+}
+
 onMounted(async () => {
   try {
     const [accRes, tokRes] = await Promise.all([api.listAccounts(1, 200), api.listTokens(1, 200)]);
     accounts.value = accRes.data ?? [];
     tokens.value = tokRes.data ?? [];
   } catch { /* ignore */ }
+  loadModels();
   loadStats();
   loadLogs();
 });
@@ -134,16 +151,31 @@ onMounted(async () => {
       <div class="flex flex-wrap items-end gap-3">
         <div>
           <label class="block text-xs text-[#8c8475] mb-1">账号</label>
-          <select v-model="filterAccount" class="h-9 px-2 rounded-lg border border-[#e7e0d6] bg-white text-sm text-[#29261e]">
+          <select v-model="filterAccount" @change="applyFilter" class="h-9 px-2 rounded-lg border border-[#e7e0d6] bg-white text-sm text-[#29261e]">
             <option value="">全部</option>
             <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name || a.email }}</option>
           </select>
         </div>
         <div>
           <label class="block text-xs text-[#8c8475] mb-1">令牌</label>
-          <select v-model="filterToken" class="h-9 px-2 rounded-lg border border-[#e7e0d6] bg-white text-sm text-[#29261e]">
+          <select v-model="filterToken" @change="applyFilter" class="h-9 px-2 rounded-lg border border-[#e7e0d6] bg-white text-sm text-[#29261e]">
             <option value="">全部</option>
             <option v-for="t in tokens" :key="t.id" :value="t.id">{{ t.name || ('#' + t.id) }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-[#8c8475] mb-1">结果</label>
+          <select v-model="filterResult" @change="applyFilter" class="h-9 px-2 rounded-lg border border-[#e7e0d6] bg-white text-sm text-[#29261e]">
+            <option value="">全部</option>
+            <option value="success">仅成功</option>
+            <option value="error">仅失败</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-[#8c8475] mb-1">模型</label>
+          <select v-model="filterModel" @change="applyFilter" class="h-9 px-2 rounded-lg border border-[#e7e0d6] bg-white text-sm text-[#29261e]">
+            <option value="">全部</option>
+            <option v-for="m in models" :key="m" :value="m">{{ m }}</option>
           </select>
         </div>
         <div>

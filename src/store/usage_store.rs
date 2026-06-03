@@ -65,11 +65,14 @@ pub async fn batch_insert_and_rollup(
     tx.commit().await
 }
 
-/// 明细分页查询（可按令牌/账号/时间区间过滤）。
+/// 明细分页查询（可按令牌/账号/模型/结果/时间区间过滤）。
+/// result: Some("error")=仅失败(>=400)，Some("success")=仅成功(<400)，None=全部。
 pub async fn list_logs(
     pool: &AnyPool,
     token_id: Option<i64>,
     account_id: Option<i64>,
+    model: Option<&str>,
+    result: Option<&str>,
     start: Option<&str>,
     end: Option<&str>,
     page: i64,
@@ -85,6 +88,10 @@ pub async fn list_logs(
         idx += 1;
         conds.push(format!("account_id = ${}", idx));
     }
+    if model.is_some() {
+        idx += 1;
+        conds.push(format!("model = ${}", idx));
+    }
     if start.is_some() {
         idx += 1;
         conds.push(format!("created_at >= ${}", idx));
@@ -92,6 +99,11 @@ pub async fn list_logs(
     if end.is_some() {
         idx += 1;
         conds.push(format!("created_at <= ${}", idx));
+    }
+    match result {
+        Some("error") => conds.push("status_code >= 400".to_string()),
+        Some("success") => conds.push("status_code < 400".to_string()),
+        _ => {}
     }
     let where_clause = if conds.is_empty() {
         String::new()
@@ -107,6 +119,9 @@ pub async fn list_logs(
     }
     if let Some(v) = account_id {
         cq = cq.bind(v);
+    }
+    if let Some(v) = model {
+        cq = cq.bind(v.to_string());
     }
     if let Some(v) = start {
         cq = cq.bind(v.to_string());
@@ -130,6 +145,9 @@ pub async fn list_logs(
     }
     if let Some(v) = account_id {
         lq = lq.bind(v);
+    }
+    if let Some(v) = model {
+        lq = lq.bind(v.to_string());
     }
     if let Some(v) = start {
         lq = lq.bind(v.to_string());

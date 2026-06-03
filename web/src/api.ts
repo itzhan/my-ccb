@@ -173,7 +173,7 @@ export const api = {
   updateSettings: (s: { client_restriction?: string }) =>
     request<{ client_restriction: string }>('PUT', '/admin/settings', s),
 
-  getUsageLogs: (params: { token_id?: number; account_id?: number; start?: string; end?: string; page?: number; page_size?: number } = {}) => {
+  getUsageLogs: (params: { token_id?: number; account_id?: number; model?: string; result?: string; start?: string; end?: string; page?: number; page_size?: number } = {}) => {
     const qs = Object.entries(params)
       .filter(([, v]) => v !== undefined && v !== null && v !== '')
       .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)

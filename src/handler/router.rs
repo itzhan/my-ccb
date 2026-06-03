@@ -630,6 +630,8 @@ async fn update_settings(
 struct UsageLogQuery {
     token_id: Option<i64>,
     account_id: Option<i64>,
+    model: Option<String>,
+    result: Option<String>,
     start: Option<String>,
     end: Option<String>,
     page: Option<i64>,
@@ -646,6 +648,8 @@ async fn get_usage_logs(
         &state.pool,
         q.token_id,
         q.account_id,
+        q.model.as_deref().filter(|s| !s.is_empty()),
+        q.result.as_deref().filter(|s| !s.is_empty()),
         q.start.as_deref(),
         q.end.as_deref(),
         page,
