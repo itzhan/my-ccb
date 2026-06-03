@@ -111,12 +111,20 @@ Bun.serve({
       return new Response('egress error: ' + (e && e.message ? e.message : e), { status: 502 });
     }
 
-    // 透传上游响应；undici 不自动解压，content-encoding 与 body 一致，原样回传。
-    // 仅去掉会与流式回传冲突的 transfer-encoding / connection。
+    // 回传上游响应头。注意：Bun 的 undici 会【自动解压】gzip/br/deflate/zstd 的 body
+    // (与真实 Claude Code 用的同一套 Bun undici 行为一致)，所以这里 body 已是明文，
+    // 必须去掉 content-encoding / content-length(否则客户端会按 gzip 解压明文 → ZlibError)。
+    // 同时去掉与流式回传冲突的 transfer-encoding / connection。
     const out = new Headers();
     for (const [k, v] of Object.entries(resp.headers)) {
       const lk = k.toLowerCase();
-      if (lk === 'transfer-encoding' || lk === 'connection') continue;
+      if (
+        lk === 'content-encoding' ||
+        lk === 'content-length' ||
+        lk === 'transfer-encoding' ||
+        lk === 'connection'
+      )
+        continue;
       if (Array.isArray(v)) for (const vv of v) out.append(k, vv);
       else if (v != null) out.set(k, v);
     }
