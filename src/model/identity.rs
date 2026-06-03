@@ -114,6 +114,23 @@ const IDENTITY_POOL: &[(&str, &str)] = &[
     ("fhughes", "Finley Hughes"), ("rsimmons", "Rowan Simmons"), ("sshaw", "Sawyer Shaw"),
 ];
 
+/// 真实感的项目名池（兜底虚拟项目用）。
+const PROJECT_POOL: &[&str] = &[
+    "api-service", "web-dashboard", "data-pipeline", "auth-server", "mobile-client",
+    "cli-tools", "analytics-engine", "backend-core", "frontend-app", "ml-trainer",
+    "infra-config", "docs-portal", "payment-gateway", "notification-svc", "user-service",
+    "search-index", "billing-app", "admin-panel", "graphql-api", "event-bus",
+    "report-builder", "chat-app", "media-server", "scheduler",
+];
+
+/// 由会话 id 稳定派生一个虚拟项目名（兜底：未捕捉到真实路径时使用）。
+pub fn virtual_project(seed: &str) -> String {
+    let s = if seed.is_empty() { "session-default" } else { seed };
+    let h = Sha256::digest(s.as_bytes());
+    let idx = (u16::from_be_bytes([h[2], h[3]]) as usize) % PROJECT_POOL.len();
+    PROJECT_POOL[idx].to_string()
+}
+
 /// 由账号种子(email 或 id)稳定派生一套虚拟身份。
 pub fn virtual_identity(seed: &str) -> VirtualIdentity {
     let s = if seed.is_empty() { "account-default" } else { seed };

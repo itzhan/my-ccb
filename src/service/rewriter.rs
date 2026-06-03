@@ -462,6 +462,19 @@ impl Rewriter {
         let shell_repl = format!("Shell: {}", pe.shell);
         let os_repl = format!("OS Version: {}", pe.os_version);
 
+        // 兜底虚拟项目：按会话 id 稳定派生（同一对话始终是同一个虚拟项目）
+        let session_id = body
+            .get("metadata")
+            .and_then(|m| m.get("user_id"))
+            .and_then(|u| u.as_str())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|j| j.get("session_id").and_then(|x| x.as_str()).map(String::from))
+            .unwrap_or_default();
+        let vproj = crate::model::identity::virtual_project(&session_id);
+        let vproj_dir = format!("{}/{}", home_plain, vproj); // /Users/vuser/<vproj>
+        let vproj_slug = format!("{}-{}", home_slug, vproj); // -Users-vuser-<vproj>
+        let anchor_repl = format!("{}/.claude/", home_plain);
+
         let scrub = |text: &str| -> String {
             // Windows 整条路径 C:\Users\bob\dev\app → /Users/vuser/dev/app
             //（去盘符、反斜杠转正斜杠、首段用户名替换为虚拟用户名）
@@ -487,6 +500,33 @@ impl Rewriter {
             t = PLATFORM_REGEX.replace_all(&t, plat_repl.as_str()).to_string();
             t = SHELL_REGEX.replace_all(&t, shell_repl.as_str()).to_string();
             t = OS_VERSION_REGEX.replace_all(&t, os_repl.as_str()).to_string();
+
+            // 兜底①：任意非标准 HOME（以 /.claude/ 为锚）一律归一到虚拟 home
+            t = HOME_ANCHOR_REGEX
+                .replace_all(&t, anchor_repl.as_str())
+                .to_string();
+            // 兜底②：工作目录若不在虚拟 home 下（未捕捉到），固定到会话虚拟项目
+            t = WORKING_DIR_REGEX
+                .replace_all(&t, |caps: &regex::Captures| {
+                    let prefix = &caps[1];
+                    let path = &caps[0][prefix.len()..];
+                    if path.starts_with(home_plain.as_str()) {
+                        caps[0].to_string()
+                    } else {
+                        format!("{}{}", prefix, vproj_dir)
+                    }
+                })
+                .to_string();
+            // 兜底③：memory 项目 slug 若未归一化，固定到会话虚拟项目 slug
+            t = PROJECTS_SLUG_REGEX
+                .replace_all(&t, |caps: &regex::Captures| {
+                    if caps[2].starts_with(home_slug.as_str()) {
+                        caps[0].to_string()
+                    } else {
+                        format!("{}{}{}", &caps[1], vproj_slug, &caps[3])
+                    }
+                })
+                .to_string();
             t
         };
 
@@ -849,6 +889,12 @@ static HOME_WIN_FULL_REGEX: Lazy<Regex> =
 /// Windows memory slug 形态 C--Users-<name>（带盘符前缀），转成 Unix slug
 static WIN_SLUG_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"[A-Za-z]--Users-([^-\s"/<]+)"#).unwrap());
+/// 兜底：任意 home 路径（以 /.claude/ 为锚），覆盖非标准 HOME
+static HOME_ANCHOR_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"([/\w.~-]+)/\.claude/").unwrap());
+/// .claude/projects/<slug>/ 中的项目 slug（兜底替换用）
+static PROJECTS_SLUG_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(\.claude/projects/)([^/\s"]+)(/)"#).unwrap());
 static SYSTEM_REMINDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<system-reminder>(.*?)</system-reminder>").unwrap());
 
