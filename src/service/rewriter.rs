@@ -365,6 +365,9 @@ impl Rewriter {
                         serde_json::Value::String(account.account_uuid.clone().unwrap_or_default()),
                     );
                 }
+                // 漏点C:只保留规范字段,删掉多余字段(email/org 等)避免多人身份泄漏。
+                // 原地 retain 保持原 key 顺序,不引入新指纹差异。
+                obj.retain(|k, _| matches!(k.as_str(), "device_id" | "account_uuid" | "session_id"));
                 let new_str = serde_json::to_string(&uid).unwrap_or_default();
                 if let Some(metadata) =
                     body.get_mut("metadata").and_then(|m| m.as_object_mut())
@@ -515,6 +518,7 @@ impl Rewriter {
                 "x-stainless-package-version" => *v = package_version.clone(),
                 "x-stainless-runtime-version" => *v = runtime_ver.clone(),
                 "anthropic-beta" => *v = beta.to_string(),
+                "anthropic-version" => *v = "2023-06-01".to_string(),
                 "accept" => *v = "application/json".to_string(),
                 _ => {}
             }
@@ -656,6 +660,40 @@ impl Rewriter {
 
         // device_id 归一化为账号固定值
         self.rewrite_metadata_user_id(body, account);
+    }
+
+    /// normalize 模式下重建 cch 一致性(漏点B):
+    /// 归一化 scrub 改了 body 内容后,真 CC 系统提示里的 `cc_version=ver.<3hex>` 和
+    /// `cch=<5hex>` 校验戳就失效了。这里用(归一化后首条用户消息 + 本请求版本)重算
+    /// cc_version 的哈希,并把 cch 重置为占位符 —— 占位符在序列化后由
+    /// compute_cch_attestation 按最终 body 重填 xxhash64,保证服务端重算能对上。
+    pub fn reattest_cch(&self, body: &mut serde_json::Value, version: &str) {
+        let version = if version.is_empty() { DEFAULT_VERSION } else { version };
+        let first_msg = extract_first_user_message(body);
+        let cch3 = compute_cch(&first_msg, version);
+        let fix = |text: &str| -> String {
+            let t = BILLING_VERSION_REGEX
+                .replace_all(text, format!("cc_version={}.{}", version, cch3).as_str())
+                .to_string();
+            CCH_VALUE_REGEX.replace_all(&t, "cch=00000").to_string()
+        };
+        match body.get_mut("system") {
+            Some(serde_json::Value::Array(arr)) => {
+                for item in arr.iter_mut() {
+                    if let Some(t) = item.get("text").and_then(|x| x.as_str()) {
+                        let nt = fix(t);
+                        if let Some(o) = item.as_object_mut() {
+                            o.insert("text".into(), serde_json::Value::String(nt));
+                        }
+                    }
+                }
+            }
+            Some(serde_json::Value::String(s)) => {
+                let nt = fix(s);
+                *s = nt;
+            }
+            _ => {}
+        }
     }
 
     fn rewrite_system_prompt(
@@ -987,7 +1025,7 @@ const CCH_PLACEHOLDER: &[u8] = b"cch=00000";
 
 /// 对序列化后的 body 字节计算 cch attestation 并原地替换占位符。
 /// 算法：xxhash64(body_with_placeholder, seed) 取低 20 bits → 5 位十六进制。
-fn compute_cch_attestation(mut body: Vec<u8>) -> Vec<u8> {
+pub fn compute_cch_attestation(mut body: Vec<u8>) -> Vec<u8> {
     if let Some(pos) = body
         .windows(CCH_PLACEHOLDER.len())
         .position(|w| w == CCH_PLACEHOLDER)
@@ -1504,4 +1542,39 @@ fn nth_index(s: &str, c: char, n: usize) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod cch_tests {
+    use super::*;
+
+    /// 验证:reattest_cch 重置占位符 + compute_cch_attestation 重填后,
+    /// 服务端用"收到的 body 把 cch 还原成占位符再 xxh64"能算出同一个值(自洽)。
+    #[test]
+    fn cch_attestation_is_self_consistent() {
+        let rw = Rewriter::new();
+        let mut body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "system": [{"type":"text","text":"You are Claude Code. x-anthropic-billing-header: cc_version=2.1.119.aaa;cch=12345;"}],
+            "messages": [{"role":"user","content":"hello world this is a first user message"}]
+        });
+        rw.reattest_cch(&mut body, "2.1.119");
+        let serialized = serde_json::to_vec(&body).unwrap();
+        // 占位符应已就位
+        assert!(serialized.windows(9).any(|w| w == b"cch=00000"), "placeholder set");
+        let filled = compute_cch_attestation(serialized.clone());
+        // 取出重填后的 5 位 cch
+        let s = String::from_utf8(filled.clone()).unwrap();
+        let pos = s.find("cch=").unwrap();
+        let cch_val = &s[pos+4..pos+9];
+        assert_ne!(cch_val, "00000", "attestation filled");
+        // 模拟服务端:把 cch 值还原成占位符,再 compute,应得同一串
+        let mut server_view = filled.clone();
+        let p = server_view.windows(9).position(|w| &w[..4]==b"cch=").unwrap();
+        server_view[p+4..p+9].copy_from_slice(b"00000");
+        let recomputed = compute_cch_attestation(server_view);
+        let rs = String::from_utf8(recomputed).unwrap();
+        let rp = rs.find("cch=").unwrap();
+        assert_eq!(&rs[rp+4..rp+9], cch_val, "server recompute matches");
+    }
 }

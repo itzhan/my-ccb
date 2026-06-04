@@ -411,42 +411,39 @@ impl GatewayService {
                     let mut bm: serde_json::Value =
                         serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}));
                     self.rewriter.normalize_cc_identity(&mut bm, &account);
+                    // 漏点A:版本坐标始终从本请求自身提取,让 header 版本 == body 版本(消除不一致)
+                    let pkg = headers
+                        .get("x-stainless-package-version")
+                        .cloned()
+                        .unwrap_or_default();
+                    let rt = headers
+                        .get("x-stainless-runtime-version")
+                        .cloned()
+                        .unwrap_or_default();
+                    let coords = crate::service::rewriter::extract_captured_coords(&ua, &pkg, &rt);
+                    // 首次吸取异步存库(仅供面板展示,不影响实际发送)
+                    if account.needs_identity_capture() && !coords.cc_version.is_empty() {
+                        let svc = self.account_svc.clone();
+                        let (aid, cv, pv, rv) = (
+                            account.id,
+                            coords.cc_version.clone(),
+                            coords.package_version.clone(),
+                            coords.runtime_version.clone(),
+                        );
+                        tokio::spawn(async move {
+                            svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
+                        });
+                    }
+                    // 漏点B:按本请求版本重算 cc_version 哈希 + cch attestation,与归一化后 body 一致
+                    self.rewriter.reattest_cch(&mut bm, &coords.cc_version);
                     let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
-                    // 版本坐标:待吸取则从本请求提取(本请求即用 + 异步存库),否则用账号已存
-                    let captured = if account.needs_identity_capture() {
-                        let pkg = headers
-                            .get("x-stainless-package-version")
-                            .cloned()
-                            .unwrap_or_default();
-                        let rt = headers
-                            .get("x-stainless-runtime-version")
-                            .cloned()
-                            .unwrap_or_default();
-                        let coords = crate::service::rewriter::extract_captured_coords(&ua, &pkg, &rt);
-                        if !coords.cc_version.is_empty() {
-                            let svc = self.account_svc.clone();
-                            let (aid, cv, pv, rv) = (
-                                account.id,
-                                coords.cc_version.clone(),
-                                coords.package_version.clone(),
-                                coords.runtime_version.clone(),
-                            );
-                            tokio::spawn(async move {
-                                svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
-                            });
-                            Some(coords)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                    let fb = crate::service::rewriter::compute_cch_attestation(fb);
                     let mut h = passthrough_headers_ordered(&ordered_headers);
                     self.rewriter.normalize_os_headers_ordered(
                         &mut h,
                         &account,
                         &req_model,
-                        captured.as_ref(),
+                        Some(&coords),
                     );
                     (fb, h)
                 } else {

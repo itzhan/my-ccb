@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多人共号 · 链路与防封分析</title>
+<style>
+  :root{
+    --bg:#1c1a17; --panel:#262320; --panel2:#2e2a26; --line:#3a3530;
+    --ink:#ece6dc; --dim:#a59c8e; --faint:#7a7165;
+    --accent:#c4704f; --accent2:#d99a6c;
+    --green:#5fb27e; --amber:#d9a441; --red:#d96a5a; --blue:#6c9bd9;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif;
+    line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header.hero{padding:54px 0 30px;border-bottom:1px solid var(--line);margin-bottom:36px}
+  .hero h1{font-size:30px;margin:0 0 10px;letter-spacing:.5px}
+  .hero h1 .em{color:var(--accent2)}
+  .hero p{color:var(--dim);margin:0;font-size:15px}
+  .hero .meta{margin-top:14px;font-size:12.5px;color:var(--faint);font-family:var(--mono)}
+  h2{font-size:20px;margin:46px 0 18px;display:flex;align-items:center;gap:10px}
+  h2 .n{font-family:var(--mono);font-size:13px;color:var(--bg);background:var(--accent);
+    width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+  .lead{background:linear-gradient(135deg,#2e2a26,#262320);border:1px solid var(--line);
+    border-radius:14px;padding:22px 24px;margin-bottom:8px}
+  .lead .verdict{font-size:16px;margin:0 0 14px;font-weight:600}
+  .lead .verdict.bad{color:var(--red)} .lead .verdict.mid{color:var(--amber)}
+  .lead ul{margin:0;padding-left:20px;color:var(--dim)} .lead li{margin:6px 0}
+  .lead b{color:var(--ink)}
+
+  /* pipeline */
+  .flow{display:flex;flex-direction:column;gap:0;margin:6px 0}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;position:relative}
+  .step.client{border-color:#4a4036}
+  .step.norm{border-color:var(--accent);box-shadow:0 0 0 1px rgba(196,112,79,.25)}
+  .step .tag{display:inline-block;font-family:var(--mono);font-size:11px;color:var(--faint);
+    border:1px solid var(--line);padding:1px 8px;border-radius:20px;margin-bottom:8px}
+  .step.norm .tag{color:var(--accent2);border-color:var(--accent)}
+  .step h3{margin:0 0 8px;font-size:16px}
+  .step h3 .star{color:var(--accent2)}
+  .step .body{color:var(--dim);font-size:13.5px}
+  .step code,.kv code{font-family:var(--mono);font-size:12px;background:#201d1a;color:var(--accent2);
+    padding:1px 6px;border-radius:5px;border:1px solid var(--line)}
+  .arrow{align-self:center;color:var(--faint);font-size:20px;line-height:1;padding:7px 0}
+  .arrow small{display:block;font-size:11px;font-family:var(--mono);color:var(--faint);text-align:center}
+  .sub{margin-top:12px;display:grid;gap:8px}
+  .subrow{display:flex;gap:12px;align-items:flex-start;background:#201d1a;border:1px solid var(--line);
+    border-radius:9px;padding:10px 13px;font-size:13px}
+  .subrow .lbl{font-family:var(--mono);font-size:11px;color:var(--accent2);min-width:52px;padding-top:1px}
+  .subrow .txt{color:var(--dim)}
+
+  /* hide table */
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+  td b{color:var(--ink)} td{color:var(--dim)}
+  .pill{font-size:11.5px;font-family:var(--mono);padding:2px 9px;border-radius:20px;white-space:nowrap;display:inline-block}
+  .pill.g{color:var(--green);background:rgba(95,178,126,.12);border:1px solid rgba(95,178,126,.3)}
+  .pill.a{color:var(--amber);background:rgba(217,164,65,.12);border:1px solid rgba(217,164,65,.3)}
+  .pill.r{color:var(--red);background:rgba(217,106,90,.12);border:1px solid rgba(217,106,90,.3)}
+  .pill.b{color:var(--blue);background:rgba(108,155,217,.12);border:1px solid rgba(108,155,217,.3)}
+
+  /* leaks */
+  .leak{border:1px solid var(--line);border-left-width:4px;border-radius:12px;padding:18px 20px;margin-bottom:14px;background:var(--panel)}
+  .leak.r{border-left-color:var(--red)} .leak.a{border-left-color:var(--amber)}
+  .leak .lh{display:flex;align-items:center;gap:11px;margin-bottom:9px;flex-wrap:wrap}
+  .leak .lh .sev{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 9px;border-radius:6px}
+  .leak.r .sev{color:#fff;background:var(--red)} .leak.a .sev{color:#3a2a10;background:var(--amber)}
+  .leak .lh h3{margin:0;font-size:16px}
+  .leak .desc{color:var(--dim);font-size:13.5px;margin:0}
+  .leak .desc b{color:var(--ink)}
+  .leak .ex{margin-top:11px;background:#201d1a;border:1px solid var(--line);border-radius:9px;
+    padding:11px 14px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .leak .ex .bad{color:var(--red)} .leak .ex .ok{color:var(--green)}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.two{grid-template-columns:1fr}}
+  .fix{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .fix h4{margin:0 0 6px;font-size:14.5px;color:var(--accent2)}
+  .fix p{margin:0;color:var(--dim);font-size:13px}
+  .fix .badge{font-family:var(--mono);font-size:11px;color:var(--faint);float:right}
+  footer{margin-top:50px;padding-top:20px;border-top:1px solid var(--line);color:var(--faint);font-size:12.5px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>多人共号 · <span class="em">链路与防封漏点</span>分析</h1>
+    <p>一个 Anthropic 账号反代给多人用,从请求进来 → 客户端模拟/归一化 → 转发到官方的完整链路,以及暴露多人的漏点。</p>
+    <div class="meta">my-ccb gateway · 基于代码精读(rewriter.rs / gateway.rs / client_guard.rs)+ 历史使用数据</div>
+  </header>
+
+  <!-- 核心结论 -->
+  <div class="lead">
+    <p class="verdict bad">核心判断:单请求伪装"接近真",但账号整体行为"不像一个人"。</p>
+    <ul>
+      <li><b>单个请求层面</b>:TLS / HTTP2 指纹、header 顺序大小写、身份字段都已统一成真 CC —— 很接近,但<b>不是 100%</b>:存在「版本 ↔ 系统提示词不一致」和「cch 校验戳不重算」两个内容缺口,混版本多人时会露馅。</li>
+      <li><b>账号整体层面</b>:一个号 = 几十人的体量 / 并发 / 时间画像,<b>这是任何单请求伪装都藏不住的</b>。</li>
+      <li>所以「单人本地永远没事、一反代多人就死」= <b>混版本触发内容不一致</b> + <b>聚合行为暴露多人</b> 两个原因叠加。</li>
+    </ul>
+  </div>
+
+  <!-- 链路 -->
+  <h2><span class="n">1</span>请求 → 模拟 → 转发 全链路</h2>
+  <div class="flow">
+
+    <div class="step client">
+      <span class="tag">CLIENT · 用户A 的真实 Claude Code 终端</span>
+      <h3>① 真实请求发出</h3>
+      <div class="body">
+        带着 <b>A 这台机器的真实指纹</b>:TLS ClientHello、
+        <code>UA=claude-cli/2.1.119</code>、<code>x-stainless-os=linux</code>、<code>arch=arm64</code>、
+        <code>runtime-version=v22</code>、<code>anthropic-version</code>、<code>session-id</code>;
+        body 里 system 提示词含 A 的 <b>home 路径 / git 名 / OS / cwd / CLAUDE.md / cc_version / cch</b>,
+        <code>metadata.user_id</code> 含 A 的 device_id。
+      </div>
+    </div>
+
+    <div class="arrow">↓<small>POST :5674</small></div>
+
+    <div class="step">
+      <span class="tag">GATEWAY · 入口</span>
+      <h3>② 鉴权 + 客户端检测</h3>
+      <div class="sub">
+        <div class="subrow"><span class="lbl">auth</span><span class="txt">校验 API token(<code>x-api-key</code> / Bearer)</span></div>
+        <div class="subrow"><span class="lbl">guard</span><span class="txt">UA / 系统提示相似度 / 必需 header(<code>strict</code> 档)→ 确认是真 CC</span></div>
+        <div class="subrow"><span class="lbl">type</span><span class="txt"><code>client_type_category(UA)</code> → cli / sdk / vscode(账号级放行用)</span></div>
+      </div>
+    </div>
+
+    <div class="arrow">↓</div>
+
+    <div class="step">
+      <span class="tag">GATEWAY · 选号</span>
+      <h3>③ 账号选择 + 限流闸门</h3>
+      <div class="sub">
+        <div class="subrow"><span class="lbl">sticky</span><span class="txt">会话粘连 <code>session_hash=ccsid:&lt;session-id&gt;</code> → 同一对话固定打同一个号</span></div>
+        <div class="subrow"><span class="lbl">gate</span><span class="txt">优先级 · 并发槽位 · <b>RPM 预占削峰</b> · <b>会话数上限</b> · 客户端类型放行</span></div>
+      </div>
+    </div>
+
+    <div class="arrow">↓<small>identity_mode = normalize</small></div>
+
+    <div class="step norm">
+      <span class="tag">REWRITER · 身份归一化 ★ 核心伪装</span>
+      <h3><span class="star">★</span> ④ 把"是谁/哪台机器"抹成账号固定虚拟身份</h3>
+      <div class="sub">
+        <div class="subrow"><span class="lbl">body</span><span class="txt"><code>normalize_cc_identity</code>:scrub 掉 system + messages 里的 home 路径、<code>-home-</code> slug、<code>Git user:</code>、Platform/Shell/OS、cwd、CLAUDE.md 路径、memory slug → 全换成<b>虚拟用户的虚拟项目</b></span></div>
+        <div class="subrow"><span class="lbl">user_id</span><span class="txt"><code>rewrite_metadata_user_id</code>:device_id、account_uuid → 账号固定值(session_id 保留)</span></div>
+        <div class="subrow"><span class="lbl">header</span><span class="txt"><code>normalize_os_headers_ordered</code>:os/arch/UA版本/package/runtime版本/anthropic-beta/accept → 账号吸取的那一套</span></div>
+        <div class="subrow"><span class="lbl">pass</span><span class="txt"><code>passthrough_headers_ordered</code>:其余 header 原样保留顺序+大小写</span></div>
+      </div>
+    </div>
+
+    <div class="arrow">↓</div>
+
+    <div class="step">
+      <span class="tag">EGRESS · bun 边车 + craftls</span>
+      <h3>⑤ 注入 token 并按真 CC 指纹转发</h3>
+      <div class="body">
+        <code>inject_auth_before_xapp</code> 把账号 token 注入到 <code>x-app</code> 前的 auth 槽位;
+        <code>EGRESS_MODE=bun_sidecar</code> 用 undici 按真 CC 的 <b>HTTP/2 指纹 + header 顺序/大小写 + TLS(JA3/JA4)</b> 发出。
+      </div>
+    </div>
+
+    <div class="arrow">↓</div>
+
+    <div class="step client">
+      <span class="tag">api.anthropic.com</span>
+      <h3>⑥ 官方收到 —— 看到的是"这个账号"的一个请求</h3>
+      <div class="body">单个请求看起来像账号主人在用;但<b>所有用户的请求叠在一个账号上</b>,整体画像见第 3 节。</div>
+    </div>
+
+  </div>
+
+  <!-- 隐藏了什么 -->
+  <h2><span class="n">2</span>我们模拟/隐藏了哪些"多人特征"</h2>
+  <table>
+    <thead><tr><th>层</th><th>多人会暴露的</th><th>我们怎么藏</th><th>强度</th></tr></thead>
+    <tbody>
+      <tr><td><b>网络指纹</b></td><td>每人机器 TLS / HTTP2 不同</td><td>bun undici 统一成真 CC 的 JA3/JA4 + h2 指纹</td><td><span class="pill g">强</span></td></tr>
+      <tr><td><b>Header</b></td><td>顺序 / 大小写 / UA / OS / arch / 版本各异</td><td>统一成账号吸取的一套 + 规范顺序</td><td><span class="pill g">较强</span></td></tr>
+      <tr><td><b>身份</b></td><td>home 用户名 / git / device_id / account_uuid 各异</td><td>全归一化成账号固定虚拟身份</td><td><span class="pill g">较强</span></td></tr>
+      <tr><td><b>路径</b></td><td>cwd / CLAUDE.md / memory 暴露真实用户</td><td>scrub 成虚拟用户的虚拟项目</td><td><span class="pill a">中</span></td></tr>
+      <tr><td><b>出口 IP</b></td><td>(多人本地 IP 不同)</td><td>全走你网关一个出口 —— 反而像一个人</td><td><span class="pill b">有利</span></td></tr>
+      <tr><td><b>速率 / 并发</b></td><td>多人 = 高速率 + 高并发</td><td>RPM 削峰 + 会话数上限</td><td><span class="pill a">部分</span></td></tr>
+    </tbody>
+  </table>
+
+  <!-- 漏点 -->
+  <h2><span class="n">3</span>漏点 —— 按严重度排</h2>
+
+  <div class="leak r">
+    <div class="lh"><span class="sev">高 · 确凿</span><h3>A. 版本不一致(header 改了,body 没改)</h3></div>
+    <p class="desc">归一化只改了 <b>header 里的版本</b>(UA / package / runtime → 账号吸取的版本),但 <b>body 里 system 提示词的版本相关内容没改</b>:真 CC 系统提示里带 <code>cc_version=2.1.119.xxx</code> 版本 token,不同版本措辞/工具 schema 也不同。混版本时 header 说一个版本、body 是另一个版本的内容。</p>
+    <div class="ex">用户A 跑 v2.1.119 →<br>　header: <span class="bad">UA = claude-cli/2.1.160</span>（被改成账号吸取版本）<br>　body&nbsp;&nbsp;: <span class="bad">cc_version = 2.1.119</span>（原样未改）<br>→ 官方一比对:<span class="bad">"header 说 160,提示词却是 119" = 篡改/异常</span></div>
+  </div>
+
+  <div class="leak r">
+    <div class="lh"><span class="sev">高 · 疑似</span><h3>B. cch 校验戳没重算</h3></div>
+    <p class="desc">真 CC 在 system 里带 <code>cch=xxxxx</code> 校验戳,由(首条用户消息几个字节 + 版本)算出。代码里 <b>API 注入模式会重算 cch,normalize 模式完全没碰</b>:我们 scrub 改了内容、改了 header 版本,cch 还是客户端用<b>原内容+原版本</b>算的旧值。若官方服务端重算比对 → 对不上 = 篡改信号。作者在 API 模式特意处理、normalize 模式漏掉,是明确的不对称缺口。</p>
+  </div>
+
+  <div class="leak a">
+    <div class="lh"><span class="sev">中</span><h3>C. 部分 header 没归一化</h3></div>
+    <p class="desc"><code>normalize_os_headers_ordered</code> 只改了 7 个 header,其余<b>原样透传</b>。其中 <code>anthropic-version</code> 不同 CC 版本可能不同 → 没改 = 漏;<code>metadata.user_id</code> 里若有 device_id/account_uuid 之外的字段(email/org)也不改 = 漏。</p>
+  </div>
+
+  <div class="leak r">
+    <div class="lh"><span class="sev">根本 · 改不掉</span><h3>D. 行为 / 聚合特征(为什么单人绝对安全、多人必死)</h3></div>
+    <p class="desc">就算每个请求都伪装完美,<b>一个账号的整体行为画像仍然不是人</b>。这是统计行为,不在单个请求里,任何 per-request 伪装都藏不住。RPM 削峰 + 会话上限是在压这一类,<b>只能缓解、不能消除</b>。</p>
+    <div class="ex">
+      · <span class="bad">体量</span>:一个号承载几十人的请求量<br>
+      · <span class="bad">并发</span>:同时 20+ 个不同 session(没人会开 24 个并行 CC 对话)<br>
+      · <span class="bad">时间</span>:24h 不间断,没有人类睡觉/吃饭空档<br>
+      · <span class="bad">多样性</span>:同一刻在几十个项目/语言/CLAUDE.md 上并行干活 —— 人是串行的
+    </div>
+  </div>
+
+  <!-- 怎么补 -->
+  <h2><span class="n">4</span>能补的(按性价比)</h2>
+  <div class="two">
+    <div class="fix"><span class="badge">补 A · 推荐先做</span><h4>版本一致化</h4><p>normalize 时把 body 系统提示里的 <code>cc_version=</code> 等版本 token 一起改成账号版本;<b>或更稳:按客户端自己的真实版本归一化</b>,不强行统一(版本本就允许不同用户不同),更不易穿帮。</p></div>
+    <div class="fix"><span class="badge">补 B</span><h4>cch 重算</h4><p>normalize 模式也走一遍 cch 重算,复用 API 模式那段逻辑,让校验戳和最终内容一致。</p></div>
+    <div class="fix"><span class="badge">补 C</span><h4>补齐 header</h4><p>把 <code>anthropic-version</code> 也纳入归一化;user_id 里多余字段一并清掉。</p></div>
+    <div class="fix"><span class="badge">压 D · 进行中</span><h4>压聚合特征</h4><p>已上线 RPM 削峰 + 会话上限;核心是<b>多上号、把每号压到像单人</b>(实测推荐 18/号 RPM、5 并发会话)。</p></div>
+  </div>
+
+  <footer>my-ccb · 多人共号链路与防封漏点分析 · 仅供你内部排查参考</footer>
+
+</div>
+</body>
+</html>
