@@ -46,8 +46,6 @@ export default function Accounts() {
   const [showDelete, setShowDelete] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
-  const [testing, setTesting] = useState<number | null>(null);
-  const [testResult, setTestResult] = useState<{ status: string; message?: string } | null>(null);
   const [refreshingUsage, setRefreshingUsage] = useState<number | null>(null);
 
   // 拉全量账号(后端单页上限 100,这里按需翻页拼全),供前端搜索/筛选/分页
@@ -185,19 +183,6 @@ export default function Accounts() {
     }
   }
 
-  async function test(id: number) {
-    setTesting(id);
-    setTestResult(null);
-    try {
-      const r = await api.testAccount(id);
-      setTestResult(r);
-      if (r.status === 'error') toast(r.message || '测试失败');
-    } catch (e) {
-      toast((e as Error).message || '测试请求失败');
-    }
-    setTimeout(() => { setTesting(null); setTestResult(null); }, 3000);
-  }
-
   async function refreshUsage(id: number) {
     setRefreshingUsage(id);
     try {
@@ -296,11 +281,6 @@ export default function Accounts() {
                         </p>
                       )}
                       {a.auth_type === 'oauth' && a.auth_error && <p className="mt-0.5 max-w-[220px] truncate text-[11px] text-red-500">{a.auth_error}</p>}
-                      {testing === a.id && testResult && (
-                        <p className={cn('mt-0.5 text-[11px] font-medium', testResult.status === 'ok' ? 'text-emerald-600' : 'text-red-500')}>
-                          {testResult.status === 'ok' ? '连接正常' : testResult.message}
-                        </p>
-                      )}
                     </TableCell>
                     {/* 状态 */}
                     <TableCell>
@@ -370,7 +350,6 @@ export default function Accounts() {
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => openEdit(a)} className="h-7 px-2 text-xs text-neutral-500">编辑</Button>
                         <Button variant="ghost" size="sm" onClick={() => refreshUsage(a.id)} disabled={refreshingUsage === a.id} className="h-7 px-2 text-xs text-indigo-600">{refreshingUsage === a.id ? '...' : '用量'}</Button>
-                        <Button variant="ghost" size="sm" onClick={() => test(a.id)} disabled={testing === a.id} className="h-7 px-2 text-xs text-indigo-600">{testing === a.id ? '...' : '测试'}</Button>
                         <Button variant="ghost" size="sm" onClick={() => { setDeleteTargetId(a.id); setShowDelete(true); }} className="h-7 px-2 text-xs text-red-500 hover:bg-red-50">删除</Button>
                       </div>
                     </TableCell>
