@@ -10,10 +10,10 @@ import { clientTypeOptions, subscriptionOptions, type FormState } from './form';
 
 type Tone = 'terra' | 'amber' | 'emerald' | 'neutral';
 const toneOn: Record<Tone, string> = {
-  terra: 'bg-primary/15 border-primary/50 text-primary',
-  amber: 'bg-amber-500/15 border-amber-500/40 text-amber-300',
-  emerald: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300',
-  neutral: 'bg-secondary/70 border-border text-foreground',
+  terra: 'bg-indigo-50 border-indigo-300 text-indigo-700',
+  amber: 'bg-amber-50 border-amber-300 text-amber-700',
+  emerald: 'bg-emerald-50 border-emerald-300 text-emerald-700',
+  neutral: 'bg-neutral-100 border-neutral-300 text-neutral-700',
 };
 function seg(active: boolean, tone: Tone = 'terra') {
   return cn(

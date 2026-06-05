@@ -3,27 +3,27 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* ---------- 设计令牌(暗色现代风,Magic UI 取向)---------- */
+/* ---------- 设计令牌(浅色现代简约风,Magic UI 取向)---------- */
 :root {
-  --background: 240 10% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 240 8% 6%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 9% 7%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 252 90% 67%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 240 5% 13%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 5% 13%;
-  --muted-foreground: 240 5% 62%;
-  --accent: 240 5% 16%;
-  --accent-foreground: 0 0% 98%;
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 240 6% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 5% 96%;
+  --secondary-foreground: 240 6% 10%;
+  --muted: 240 5% 96%;
+  --muted-foreground: 240 4% 46%;
+  --accent: 240 5% 96%;
+  --accent-foreground: 240 6% 10%;
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 98%;
-  --border: 240 5% 15%;
-  --input: 240 5% 18%;
-  --ring: 252 90% 67%;
+  --border: 240 6% 90%;
+  --input: 240 6% 90%;
+  --ring: 240 6% 10%;
   --radius: 0.8rem;
 }
 
@@ -102,5 +102,5 @@ body {
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: hsl(240 5% 20%); border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: hsl(240 5% 28%); }
+::-webkit-scrollbar-thumb { background: hsl(240 5% 84%); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(240 5% 74%); }

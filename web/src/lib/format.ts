@@ -5,18 +5,18 @@ export function isRateLimited(a: Account): boolean {
   return !!(a.rate_limit_reset_at && new Date(a.rate_limit_reset_at) > new Date());
 }
 
-/** 状态徽章样式(暗色)+ 文案 */
+/** 状态徽章样式(浅色)+ 文案 */
 export function statusStyle(a: Account): { className: string; label: string; dot: string } {
   if (a.status === 'active' && isRateLimited(a)) {
-    return { className: 'border-amber-500/30 bg-amber-500/10 text-amber-300', label: '限流中', dot: 'bg-amber-400' };
+    return { className: 'border-amber-200 bg-amber-50 text-amber-700', label: '限流中', dot: 'bg-amber-500' };
   }
   if (a.status === 'active') {
-    return { className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300', label: '活跃', dot: 'bg-emerald-400' };
+    return { className: 'border-emerald-200 bg-emerald-50 text-emerald-700', label: '活跃', dot: 'bg-emerald-500' };
   }
   if (a.status === 'error') {
-    return { className: 'border-red-500/30 bg-red-500/10 text-red-300', label: '异常', dot: 'bg-red-400' };
+    return { className: 'border-red-200 bg-red-50 text-red-600', label: '异常', dot: 'bg-red-500' };
   }
-  return { className: 'border-zinc-600/40 bg-zinc-500/10 text-zinc-400', label: '停用', dot: 'bg-zinc-500' };
+  return { className: 'border-neutral-200 bg-neutral-100 text-neutral-500', label: '停用', dot: 'bg-neutral-400' };
 }
 
 /** 用量进度条颜色 */

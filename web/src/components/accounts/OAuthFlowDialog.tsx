@@ -28,13 +28,13 @@ async function copyText(text: string, toast: (m: string, t?: 'success' | 'error'
 
 function pill(active: boolean, tone: 'amber' | 'terra' | 'emerald') {
   const on = {
-    amber: 'bg-amber-500/15 border-amber-500/40 text-amber-300',
-    terra: 'bg-primary/15 border-primary/50 text-primary',
-    emerald: 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300',
+    amber: 'bg-amber-50 border-amber-300 text-amber-700',
+    terra: 'bg-indigo-50 border-indigo-300 text-indigo-700',
+    emerald: 'bg-emerald-50 border-emerald-300 text-emerald-700',
   }[tone];
   return cn(
     'flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all',
-    active ? on : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground',
+    active ? on : 'border-border bg-neutral-50 text-muted-foreground hover:text-foreground',
   );
 }
 

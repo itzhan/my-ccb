@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>虚拟形象升级 · 多目录高强度工作画像</title>
+<style>
+  :root{
+    --bg:#1c1a17; --panel:#262320; --panel2:#2e2a26; --line:#3a3530;
+    --ink:#ece6dc; --dim:#a59c8e; --faint:#7a7165;
+    --accent:#c4704f; --accent2:#d99a6c;
+    --green:#5fb27e; --amber:#d9a441; --red:#d96a5a; --blue:#6c9bd9;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',sans-serif;
+    line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 80px}
+  header.hero{padding:54px 0 30px;border-bottom:1px solid var(--line);margin-bottom:36px}
+  .hero h1{font-size:30px;margin:0 0 10px;letter-spacing:.5px}
+  .hero h1 .em{color:var(--accent2)}
+  .hero p{color:var(--dim);margin:0;font-size:15px}
+  .hero .meta{margin-top:14px;font-size:12.5px;color:var(--faint);font-family:var(--mono)}
+
+  h2{font-size:20px;margin:46px 0 18px;display:flex;align-items:center;gap:10px}
+  h2 .n{font-family:var(--mono);font-size:13px;color:var(--bg);background:var(--accent);
+    width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+  h3{font-size:15px;margin:18px 0 10px;color:var(--ink)}
+
+  .lead{background:linear-gradient(135deg,#2e2a26,#262320);border:1px solid var(--line);
+    border-radius:14px;padding:22px 24px;margin-bottom:8px}
+  .lead .verdict{font-size:16px;margin:0 0 14px;font-weight:600;color:var(--accent2)}
+  .lead p{margin:0;color:var(--dim);font-size:14px}
+  .lead b{color:var(--ink)}
+
+  /* 对比表 */
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:6px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+  td b{color:var(--ink)} td{color:var(--dim)}
+  td.bad{color:var(--red)} td.good{color:var(--green)}
+  td code{font-family:var(--mono);font-size:12px;color:var(--accent2)}
+
+  /* 问题卡片 */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:6px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card .tag{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.6px;
+    padding:2px 8px;border-radius:20px;margin-bottom:8px}
+  .card.bad .tag{color:var(--red);border:1px solid #5c3a36;background:#2e211f}
+  .card.good .tag{color:var(--green);border:1px solid #345040;background:#1f2d25}
+  .card h4{margin:0 0 8px;font-size:15px}
+  .card p{margin:0;color:var(--dim);font-size:13.5px}
+  .card code{font-family:var(--mono);font-size:11.5px;background:#201d1a;color:var(--accent2);
+    padding:1px 6px;border-radius:5px;border:1px solid var(--line)}
+
+  /* 代码块 */
+  pre.code{background:#181613;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-family:var(--mono);font-size:12.5px;color:#d4cdbe;line-height:1.55}
+  pre.code .k{color:var(--accent2)} pre.code .s{color:var(--green)}
+  pre.code .c{color:var(--faint);font-style:italic} pre.code .n{color:var(--blue)}
+
+  /* cwd 分布柱状图 */
+  .bars{margin-top:8px}
+  .bar{display:grid;grid-template-columns:1fr 60px;gap:14px;align-items:center;
+    padding:7px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .bar:last-child{border-bottom:none}
+  .bar .path{font-family:var(--mono);font-size:12.5px;color:var(--dim)}
+  .bar .path .proj{color:var(--accent2)}
+  .bar .vis{position:relative;display:flex;align-items:center;gap:8px}
+  .bar .fill{height:9px;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:3px}
+  .bar .pct{font-family:var(--mono);font-size:11.5px;color:var(--faint);min-width:32px;text-align:right}
+
+  /* 时间线 */
+  .timeline{margin-top:6px;padding-left:18px;border-left:2px solid var(--line)}
+  .step{position:relative;padding:8px 0 18px 16px}
+  .step::before{content:"";position:absolute;left:-25px;top:14px;width:10px;height:10px;
+    border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--bg)}
+  .step h4{margin:0 0 4px;font-size:14.5px}
+  .step .meta{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-bottom:6px}
+  .step p{margin:0;color:var(--dim);font-size:13.5px}
+
+  /* 数字标 */
+  .stat{display:flex;gap:24px;margin:10px 0 4px;flex-wrap:wrap}
+  .stat .item{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:12px 18px;min-width:140px}
+  .stat .item .v{font-family:var(--mono);font-size:22px;color:var(--accent2);line-height:1.2}
+  .stat .item .l{font-size:11.5px;color:var(--faint);letter-spacing:.5px;text-transform:uppercase;margin-top:4px}
+
+  /* 注脚 */
+  .note{font-size:12.5px;color:var(--faint);margin-top:10px;padding-left:14px;border-left:2px solid var(--line)}
+  .arrow{color:var(--accent);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>虚拟形象升级 · <span class="em">"一人多目录高强度工作"</span> 画像</h1>
+  <p>不动 session_id / IP / 时间窗口,只在虚拟形象上发力,把多人共号呈现为一个全栈开发者在公司 5~8 个项目间反复切换的标准画像。</p>
+  <div class="meta">v1 · 2026-06-05 · 后续接 [[多人共号链路分析]]</div>
+</header>
+
+<!-- ========== 0. 一句话 ========== -->
+<div class="lead">
+  <div class="verdict">核心思想</div>
+  <p>当前画像把每个新会话派生成<b>新项目</b>(24 个随机轮转)。改造后:每个账号有<b>固定的 5~8 个虚拟项目</b>,带权重、子目录、git branch、创建时间 —— 多人请求按 Zipf 分布落进这套"项目宇宙",上游看到的就是<b>一个开发者长期维护的几个项目</b>。</p>
+</div>
+
+<!-- ========== 1. 当前画像问题 ========== -->
+<h2><span class="n">1</span>当前画像 5 大穿帮点</h2>
+
+<div class="grid">
+  <div class="card bad">
+    <span class="tag">穿帮 #1</span>
+    <h4>每个新 session = 新项目</h4>
+    <p><code>virtual_project(session_id)</code> 直接 hash,同一用户重启 CC 就换项目,一天出现 30+ 个项目。真单人:3~5 个反复出现。</p>
+  </div>
+
+  <div class="card bad">
+    <span class="tag">穿帮 #2</span>
+    <h4>项目权重均匀分布</h4>
+    <p>24 候选 hash 取模 = 完全均匀。真单人是 Zipf —— 1 主项目占 60~70%,辅助占 20~30%,老项目占 5%。</p>
+  </div>
+
+  <div class="card bad">
+    <span class="tag">穿帮 #3</span>
+    <h4>cwd 只有项目根,没子目录</h4>
+    <p>风控看到的全是 <code>~/api-service</code>。真单人 cwd 大多是 <code>~/api-service/src/handlers</code> 这种 2~4 级子目录。</p>
+  </div>
+
+  <div class="card bad">
+    <span class="tag">穿帮 #4</span>
+    <h4>项目寿命错乱</h4>
+    <p>每个项目"今天出现 3 次、明天消失、后天又冒一次"——鬼出鬼没。真单人主项目连续几个月每天活跃。</p>
+  </div>
+
+  <div class="card bad">
+    <span class="tag">穿帮 #5</span>
+    <h4>git branch 瞬移</h4>
+    <p>同一虚拟项目 <code>api-service</code> 下,branch 在 <code>feat/payment</code> / <code>bugfix/login</code> / <code>main</code> 间乱跳——这是不同人在不同仓库的铁证。</p>
+  </div>
+</div>
+
+<!-- ========== 2. 画像对比 ========== -->
+<h2><span class="n">2</span>真单人 vs 当前 vs 改造后</h2>
+
+<table>
+  <thead>
+    <tr><th style="width:22%">维度</th><th style="width:26%">真单人画像</th><th style="width:26%">当前 (穿帮)</th><th style="width:26%">改造后 (目标)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><b>项目数量</b></td><td class="good">5~8 个长期共存</td><td class="bad">一天 30+ 个</td><td class="good">账号级固定 5~8 个</td></tr>
+    <tr><td><b>项目权重</b></td><td class="good">Zipf(1 主 + 2 辅 + N 老)</td><td class="bad">完全均匀</td><td class="good">权重表加权选择</td></tr>
+    <tr><td><b>项目寿命</b></td><td class="good">主项目数月、辅助数周</td><td class="bad">鬼出鬼没</td><td class="good">带 created_days_ago</td></tr>
+    <tr><td><b>cwd 深度</b></td><td class="good">2~4 级子目录</td><td class="bad">仅 1 级根目录</td><td class="good">每项目预设子目录树</td></tr>
+    <tr><td><b>子目录复用</b></td><td class="good">反复出现同几个</td><td class="bad">无概念</td><td class="good">session → 子目录稳定映射</td></tr>
+    <tr><td><b>git branch</b></td><td class="good">项目内有限 + 风格统一</td><td class="bad">用户原值瞬移</td><td class="good">scrub 后从项目 branch 池取</td></tr>
+    <tr><td><b>父级目录</b></td><td class="good"><code>~/code/</code> 或 <code>~/Workspace/</code></td><td class="bad">仅 <code>~/</code></td><td class="good">账号级稳定前缀</td></tr>
+  </tbody>
+</table>
+
+<!-- ========== 3. 数据模型 ========== -->
+<h2><span class="n">3</span>账号"虚拟工作空间"数据模型</h2>
+
+<p style="color:var(--dim);font-size:14px;margin:0 0 10px">accounts 表新增字段 <code>virtual_workspace</code>(JSON),新账号自动按 seed 生成,前端可手动微调。</p>
+
+<pre class="code">
+<span class="k">virtual_workspace</span>: {
+  <span class="k">workspace_root</span>: <span class="s">"/home/cwong/code"</span>,           <span class="c">// 账号级固定父级目录</span>
+  <span class="k">projects</span>: [
+    {
+      <span class="k">name</span>: <span class="s">"acme-platform"</span>,                  <span class="c">// 主项目</span>
+      <span class="k">weight</span>: <span class="n">50</span>,
+      <span class="k">created_days_ago</span>: <span class="n">187</span>,                  <span class="c">// 模拟"3 个月前开的项目"</span>
+      <span class="k">subdirs</span>: [<span class="s">"src/api"</span>, <span class="s">"src/handlers"</span>, <span class="s">"internal/auth"</span>, <span class="s">"cmd/server"</span>],
+      <span class="k">branches</span>: [<span class="s">"main"</span>, <span class="s">"feat/billing-v2"</span>, <span class="s">"feat/oauth-migration"</span>]
+    },
+    { <span class="k">name</span>:<span class="s">"acme-dashboard"</span>, <span class="k">weight</span>:<span class="n">25</span>, <span class="k">created_days_ago</span>:<span class="n">92</span>,  <span class="c">/* 辅助 */</span>
+      <span class="k">subdirs</span>:[<span class="s">"src/components"</span>,<span class="s">"src/pages/admin"</span>,<span class="s">"src/lib"</span>],
+      <span class="k">branches</span>:[<span class="s">"main"</span>,<span class="s">"feat/react-frontend"</span>] },
+    { <span class="k">name</span>:<span class="s">"data-pipeline"</span>,  <span class="k">weight</span>:<span class="n">15</span>, <span class="k">created_days_ago</span>:<span class="n">145</span> ,<span class="k">subdirs</span>:[<span class="s">"etl/transforms"</span>],<span class="k">branches</span>:[<span class="s">"main"</span>]},
+    { <span class="k">name</span>:<span class="s">"infra-config"</span>,   <span class="k">weight</span>:<span class="n">7</span>,  <span class="k">created_days_ago</span>:<span class="n">240</span> ,<span class="k">subdirs</span>:[<span class="s">"terraform/prod"</span>,<span class="s">"k8s/staging"</span>],<span class="k">branches</span>:[<span class="s">"main"</span>]},
+    { <span class="k">name</span>:<span class="s">"old-cli-tool"</span>,   <span class="k">weight</span>:<span class="n">3</span>,  <span class="k">created_days_ago</span>:<span class="n">410</span> ,<span class="k">subdirs</span>:[<span class="s">""</span>],<span class="k">branches</span>:[<span class="s">"main"</span>] }      <span class="c">// 老项目</span>
+  ]
+}
+</pre>
+
+<div class="note">同一 session 始终落在同一 (project, subdir) → 长会话稳定;不同 session 按权重落到不同项目 → 主项目占主导。</div>
+
+<!-- ========== 4. 改造后的画面 ========== -->
+<h2><span class="n">4</span>改造后:账号 X 一天的 cwd 分布</h2>
+
+<div class="bars">
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">acme-platform</span>/src/api</div>
+    <div class="vis"><div class="fill" style="width:175px"></div><span class="pct">35%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">acme-dashboard</span>/src/components</div>
+    <div class="vis"><div class="fill" style="width:90px"></div><span class="pct">18%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">acme-platform</span>/internal/auth</div>
+    <div class="vis"><div class="fill" style="width:75px"></div><span class="pct">15%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">data-pipeline</span>/etl/transforms</div>
+    <div class="vis"><div class="fill" style="width:50px"></div><span class="pct">10%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">acme-platform</span>/cmd/server</div>
+    <div class="vis"><div class="fill" style="width:40px"></div><span class="pct">8%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">acme-dashboard</span>/src/pages/admin</div>
+    <div class="vis"><div class="fill" style="width:40px"></div><span class="pct">8%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">infra-config</span>/terraform/prod</div>
+    <div class="vis"><div class="fill" style="width:25px"></div><span class="pct">5%</span></div>
+  </div>
+  <div class="bar">
+    <div class="path">~/code/<span class="proj">old-cli-tool</span></div>
+    <div class="vis"><div class="fill" style="width:5px"></div><span class="pct">1%</span></div>
+  </div>
+</div>
+
+<div class="stat">
+  <div class="item"><div class="v">5</div><div class="l">distinct 项目</div></div>
+  <div class="item"><div class="v">8</div><div class="l">distinct 子目录</div></div>
+  <div class="item"><div class="v">187d</div><div class="l">主项目寿命</div></div>
+  <div class="item"><div class="v">70%</div><div class="l">主项目占比</div></div>
+</div>
+
+<div class="note">配合已有的 git user / Platform / OS / device_id 钉死 —— <b>完全是"一个全栈开发者在公司 5 个项目间高强度工作"的标准画面</b>。</div>
+
+<!-- ========== 5. 改造点 ========== -->
+<h2><span class="n">5</span>5 个改造点 (按依赖顺序)</h2>
+
+<div class="grid">
+  <div class="card good">
+    <span class="tag">改造 A · 核心</span>
+    <h4>项目宇宙数据模型</h4>
+    <p><code>model/identity.rs</code> 新增 <code>Workspace</code>/<code>Project</code> 结构;新账号按 seed 生成 5~8 个项目,权重 Zipf 分布,<code>created_days_ago</code> 随机 30~500 天分散。</p>
+  </div>
+
+  <div class="card good">
+    <span class="tag">改造 B</span>
+    <h4>加权选择 + 子目录派生</h4>
+    <p>替换 <code>virtual_project()</code>:主 hash 选项目(权重)、副 hash 选子目录。同一 session 稳定落到同一 (project, subdir)。</p>
+  </div>
+
+  <div class="card good">
+    <span class="tag">改造 C</span>
+    <h4>BRANCH_REGEX scrub</h4>
+    <p>rewriter 加新 regex 匹配 <code>Branch: xxx</code>,按当前 cwd 对应的项目从 <code>branches</code> 池里取一个稳定值替换。</p>
+  </div>
+
+  <div class="card good">
+    <span class="tag">改造 D</span>
+    <h4>workspace_root 多样化</h4>
+    <p>父级目录候选 <code>~/code</code>/<code>~/Workspace</code>/<code>~/dev</code>/<code>~/Documents/projects</code>,账号 seed 派生选定,整账号统一。</p>
+  </div>
+
+  <div class="card good">
+    <span class="tag">改造 E · 可选</span>
+    <h4>前端工作空间编辑器</h4>
+    <p>账号表单加 JSON 编辑器,让你能手工给每个号画不同的"开发者人设"——后端写 web、数据写 ML、运维写 infra。</p>
+  </div>
+</div>
+
+<!-- ========== 6. 工作量 + 执行步骤 ========== -->
+<h2><span class="n">6</span>工作量估算 + 执行顺序</h2>
+
+<table>
+  <thead>
+    <tr><th>文件</th><th>改动</th><th>行数</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>model/identity.rs</code></td><td>新增 Workspace/Project 结构 + 生成函数</td><td>~80</td></tr>
+    <tr><td><code>model/account.rs</code></td><td>加 <code>virtual_workspace</code> 字段</td><td>~15</td></tr>
+    <tr><td><code>store/db.rs</code></td><td>ALTER TABLE 加列 + 迁移</td><td>~10</td></tr>
+    <tr><td><code>service/rewriter.rs</code></td><td>替换 virtual_project 调用 + BRANCH_REGEX</td><td>~50</td></tr>
+    <tr><td><code>web/.../Accounts.vue</code></td><td>工作空间 JSON 编辑器</td><td>~100</td></tr>
+    <tr><td colspan="2" style="color:var(--ink)"><b>合计</b></td><td><b>~255 行</b></td></tr>
+  </tbody>
+</table>
+
+<div class="timeline">
+  <div class="step">
+    <h4>第 1 步:数据模型 + 自动生成</h4>
+    <div class="meta">identity.rs · account.rs · db.rs</div>
+    <p>跑通"账号一天只在固定 5~8 个项目间切换",移除按 session_id 派生的随机性。</p>
+  </div>
+  <div class="step">
+    <h4>第 2 步:子目录深度</h4>
+    <div class="meta">rewriter.rs · scrub 逻辑</div>
+    <p>cwd 不再都是项目根,出现 <code>src/api</code> / <code>internal/handlers</code> 等子模块。</p>
+  </div>
+  <div class="step">
+    <h4>第 3 步:BRANCH_REGEX 堵 git 穿帮</h4>
+    <div class="meta">rewriter.rs · 新增 regex</div>
+    <p>git branch 不再瞬移,同一虚拟项目下 branch 在 2~3 个虚拟分支间稳定切换。</p>
+  </div>
+  <div class="step">
+    <h4>第 4 步:前端编辑器 (质量提升)</h4>
+    <div class="meta">Accounts.vue</div>
+    <p>让你能手工画不同人设,避免所有账号都长得像。</p>
+  </div>
+</div>
+
+<!-- ========== 7. 不做什么 ========== -->
+<h2><span class="n">7</span>明确不做的事</h2>
+
+<div class="grid">
+  <div class="card bad">
+    <span class="tag">不动</span>
+    <h4>commit message 内容</h4>
+    <p>对话主题本就千差万别,强行统一反而会引入 CC 行为偏差。<code>Recent commits</code> 块保留用户真实内容,只确保格式像 git short SHA。</p>
+  </div>
+  <div class="card bad">
+    <span class="tag">不动</span>
+    <h4>对话内容(messages)语义</h4>
+    <p>多人共号语义跨度无法治理。一个真开发者也可能今天 Rust、明天 Python——不视为破绽。</p>
+  </div>
+  <div class="card bad">
+    <span class="tag">不动</span>
+    <h4>session_id 池化 / IP / 时间窗口</h4>
+    <p>上一轮已经讨论过,用户判定方向不对,这版方案只聚焦虚拟形象层。</p>
+  </div>
+</div>
+
+<!-- ========== 8. 一句话总结 ========== -->
+<h2><span class="n">8</span>一句话</h2>
+<div class="lead">
+  <p>当前画像在<b>"路径"</b>这一层还在每会话随机派生,等于自报"每天都开新项目"。把项目固化成<b>账号级 5~8 个稳定宇宙</b>+ 加子目录深度 + branch 替换,上游就只能看到<b>一个开发者在长期维护的几个项目间高强度工作</b>。</p>
+</div>
+
+</div>
+</body>
+</html>

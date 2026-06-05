@@ -34,11 +34,11 @@ export default function Login() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
-      <DotPattern className="[mask-image:radial-gradient(45%_45%_at_50%_45%,#000,transparent)]" />
-      <div className="pointer-events-none absolute left-1/2 top-1/3 h-96 w-96 -translate-x-1/2 rounded-full bg-primary/20 blur-[120px]" />
+      <DotPattern className="fill-neutral-300/50 [mask-image:radial-gradient(45%_45%_at_50%_45%,#000,transparent)]" />
+      <div className="pointer-events-none absolute left-1/2 top-1/3 h-96 w-96 -translate-x-1/2 rounded-full bg-indigo-300/35 blur-[120px]" />
 
       <div className="relative z-10 w-full max-w-sm">
-        <div className="relative overflow-hidden rounded-3xl border border-border bg-card/70 p-8 shadow-2xl backdrop-blur-xl">
+        <div className="relative overflow-hidden rounded-3xl border border-neutral-200 bg-white/80 p-8 shadow-xl backdrop-blur-xl">
           <BorderBeam size={140} duration={10} />
           <div className="mb-7 flex flex-col items-center">
             <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-lg shadow-primary/30 ring-1 ring-white/10">
@@ -59,7 +59,7 @@ export default function Login() {
               className="h-11 rounded-xl"
               autoFocus
             />
-            {error && <p className="text-center text-sm text-red-400">{error}</p>}
+            {error && <p className="text-center text-sm text-red-500">{error}</p>}
             <ShimmerButton type="submit" disabled={loading} className="h-11 w-full font-medium">
               {loading ? '登录中…' : '登录'}
             </ShimmerButton>
