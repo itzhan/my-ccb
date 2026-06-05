@@ -1,10 +1,14 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
-import vue from '@vitejs/plugin-vue';
+import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
+// 开发期把 /admin、/v1 代理到后端。默认指向线上网关，便于用真实数据看效果；
+// 本地起了 cargo run 的话设 VITE_PROXY_TARGET=http://localhost:5674 即可。
+const TARGET = process.env.VITE_PROXY_TARGET || 'http://67.21.86.146:5674';
+
 export default defineConfig({
-  plugins: [vue(), tailwindcss()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -13,9 +17,9 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/admin': 'http://localhost:5674',
-      '/v1': 'http://localhost:5674',
-      '/_health': 'http://localhost:5674',
+      '/admin': { target: TARGET, changeOrigin: true },
+      '/v1': { target: TARGET, changeOrigin: true },
+      '/_health': { target: TARGET, changeOrigin: true },
     },
   },
 });
