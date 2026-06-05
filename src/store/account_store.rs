@@ -440,8 +440,12 @@ impl AccountStore {
 
     pub async fn list_paged(&self, page: i64, page_size: i64) -> Result<Vec<Account>, AppError> {
         let offset = (page - 1) * page_size;
+        // 活着的(active)优先,异常(error)次之,停用(disabled)垫底;同级按优先级、id。
+        // CASE on status 对 SQLite / PostgreSQL 均有效。
         let q = format!(
-            "SELECT {} FROM accounts ORDER BY priority ASC, id ASC LIMIT $1 OFFSET $2",
+            "SELECT {} FROM accounts \
+             ORDER BY (CASE status WHEN 'active' THEN 0 WHEN 'error' THEN 1 WHEN 'disabled' THEN 2 ELSE 3 END), \
+             priority ASC, id ASC LIMIT $1 OFFSET $2",
             ACCOUNT_COLS
         );
         let rows: Vec<AnyRow> = sqlx::query(&q)

@@ -153,12 +153,8 @@ async fn list_accounts(
     let (accounts, total) = state.account_svc.list_accounts_paged(page, page_size).await?;
     let total_pages = (total + page_size - 1) / page_size;
 
-    // 批量获取 RPM 计数
-    let rpm_account_ids: Vec<i64> = accounts
-        .iter()
-        .filter(|a| a.rpm_limit.map(|v| v > 0).unwrap_or(false))
-        .map(|a| a.id)
-        .collect();
+    // 批量获取 RPM 计数（所有账号都计数，不再只看 rpm_limit）
+    let rpm_account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
     let rpm_counts = if !rpm_account_ids.is_empty() {
         state.account_svc.get_rpm_batch(&rpm_account_ids).await
     } else {
@@ -172,9 +168,7 @@ async fn list_accounts(
         if let Some(expires) = state.telemetry_svc.get_session_expires_at(a.id).await {
             obj["telemetry_expires_at"] = serde_json::json!(expires.to_rfc3339());
         }
-        if a.rpm_limit.map(|v| v > 0).unwrap_or(false) {
-            obj["current_rpm"] = serde_json::json!(rpm_counts.get(&a.id).copied().unwrap_or(0));
-        }
+        obj["current_rpm"] = serde_json::json!(rpm_counts.get(&a.id).copied().unwrap_or(0));
         // 实时并发占用数 + 活跃会话数
         obj["current_concurrency"] = serde_json::json!(state.account_svc.get_slot_count(a.id).await);
         obj["current_sessions"] = serde_json::json!(state.account_svc.session_count(a.id).await);

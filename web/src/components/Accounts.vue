@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { api, type Account, type OAuthExchangeResult } from '../api';
-import { Card } from '@/components/ui/card';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -106,6 +106,17 @@ const visiblePages = computed(() => {
   start = Math.max(1, end - 4);
   for (let i = start; i <= end; i++) pages.push(i);
   return pages;
+});
+
+/** 活着优先排序：active&未限流(0) > active&限流(1) > error(2) > disabled/其它(3)。
+ *  同级保持后端顺序(后端已按状态分级 + 优先级排,这里在当前页内细排限流态)。 */
+const sortedAccounts = computed(() => {
+  const rank = (a: Account): number => {
+    if (a.status === 'active') return isRateLimited(a) ? 1 : 0;
+    if (a.status === 'error') return 2;
+    return 3;
+  };
+  return [...accounts.value].sort((x, y) => rank(x) - rank(y));
 });
 
 /** 自动重载定时器 */
@@ -583,242 +594,155 @@ async function copyText(text: string) {
       </div>
     </div>
 
-    <!-- 账号卡片列表 -->
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      <Card
-        v-for="a in accounts"
-        :key="a.id"
-        class="bg-white border-[#e8e2d9] rounded-xl hover:shadow-md transition-all duration-200 overflow-hidden"
-        :class="(a.status === 'disabled' || isRateLimited(a)) ? 'opacity-60' : ''"
-      >
-        <div class="p-5 space-y-3">
-          <!-- 头部：名称 + 状态 -->
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2 min-w-0">
-              <div class="w-8 h-8 rounded-lg bg-[#c4704f]/10 flex items-center justify-center flex-shrink-0">
-                <span class="text-[#c4704f] text-sm font-semibold">{{ (a.name || a.email)[0].toUpperCase() }}</span>
-              </div>
-              <div class="min-w-0">
-                <p class="text-sm font-medium text-[#29261e] truncate">{{ a.name || a.email }}</p>
-                <p v-if="a.name" class="text-xs text-[#8c8475] truncate">{{ a.email }}</p>
-              </div>
-            </div>
-            <Badge :class="statusStyle(a).class" class="border text-xs font-medium flex-shrink-0">
-              {{ statusStyle(a).label }}
-            </Badge>
-          </div>
-
-          <!-- 信息 -->
-          <div class="pt-2 border-t border-[#f0ebe4] space-y-2">
-            <div class="grid grid-cols-4 gap-3">
-              <div class="text-center">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">并发(实时)</p>
-                <p class="text-sm font-medium" :class="(a.current_concurrency || 0) >= a.concurrency ? 'text-red-500' : (a.current_concurrency || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
-                  {{ a.current_concurrency || 0 }} / {{ a.concurrency }}
-                </p>
-              </div>
-              <div class="text-center">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">会话(实时)</p>
-                <p class="text-sm font-medium" :class="a.max_sessions && (a.current_sessions || 0) >= a.max_sessions ? 'text-red-500' : (a.current_sessions || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
-                  {{ a.current_sessions || 0 }} / {{ a.max_sessions || '∞' }}
-                </p>
-              </div>
-              <div class="text-center">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">优先级</p>
-                <p class="text-sm font-medium text-[#29261e]">{{ a.priority }}</p>
-              </div>
-              <div class="text-center">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">Billing</p>
-                <p class="text-sm font-medium" :class="a.billing_mode === 'rewrite' ? 'text-amber-600' : 'text-[#29261e]'">
-                  {{ a.billing_mode === 'rewrite' ? '重写' : '清除' }}
-                </p>
-              </div>
-            </div>
-            <div class="space-y-3">
-              <div v-if="a.rpm_limit && a.rpm_limit > 0">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">RPM</p>
-                <div class="flex items-center gap-2">
-                  <div class="flex-1 bg-[#f0ebe4] rounded-full h-2 overflow-hidden">
-                    <div
-                      class="h-full rounded-full transition-all"
-                      :class="(a.current_rpm || 0) / a.rpm_limit >= 0.8 ? 'bg-red-500' : (a.current_rpm || 0) / a.rpm_limit >= 0.5 ? 'bg-amber-500' : 'bg-emerald-500'"
-                      :style="{ width: Math.min(100, ((a.current_rpm || 0) / a.rpm_limit) * 100) + '%' }"
-                    />
-                  </div>
-                  <span class="text-xs text-[#8c8475] whitespace-nowrap">{{ a.current_rpm || 0 }} / {{ a.rpm_limit }}</span>
+    <!-- 账号列表（表格） -->
+    <div class="border border-[#e8e2d9] rounded-xl overflow-x-auto bg-white">
+      <Table>
+        <TableHeader>
+          <TableRow class="border-[#f0ebe4] bg-[#faf8f5] hover:bg-[#faf8f5]">
+            <TableHead class="text-[#8c8475] text-xs">账号</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">状态</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">并发</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">会话</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">RPM</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">用量(5h/7d/Son)</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">身份/遥测</TableHead>
+            <TableHead class="text-[#8c8475] text-xs">配置</TableHead>
+            <TableHead class="text-[#8c8475] text-xs text-right">操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow
+            v-for="a in sortedAccounts"
+            :key="a.id"
+            class="border-[#f0ebe4] hover:bg-[#faf8f5]/60 align-top"
+            :class="(a.status === 'disabled' || isRateLimited(a)) ? 'opacity-60' : ''"
+          >
+            <!-- 账号 -->
+            <TableCell class="py-2.5">
+              <div class="flex items-center gap-2 min-w-0 max-w-[220px]">
+                <div class="w-7 h-7 rounded-lg bg-[#c4704f]/10 flex items-center justify-center flex-shrink-0">
+                  <span class="text-[#c4704f] text-xs font-semibold">{{ (a.name || a.email)[0].toUpperCase() }}</span>
+                </div>
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-[#29261e] truncate">{{ a.name || a.email }}</p>
+                  <p v-if="a.name" class="text-xs text-[#8c8475] truncate">{{ a.email }}</p>
                 </div>
               </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">身份模拟</p>
-                <p class="text-sm truncate" :class="a.identity_mode === 'normalize' ? 'text-emerald-600' : 'text-[#8c8475]'">
-                  {{ a.identity_mode === 'normalize' ? '归一化' : '透传' }}
-                  <span v-if="a.identity_mode === 'normalize' && a.effective_identity" class="text-[#b5b0a6] text-xs">· {{ a.effective_identity.virtual_user }}</span>
-                </p>
-                <p v-if="a.identity_mode === 'normalize'" class="text-[11px] mt-0.5" :class="a.identity_captured_at ? 'text-[#8c8475]' : 'text-amber-500'">
-                  <template v-if="a.identity_captured_at">已吸取 v{{ a.canonical_env?.version }}<span v-if="a.recapture_days">· 每{{ a.recapture_days }}天重吸</span></template>
-                  <template v-else>版本待吸取</template>
-                </p>
-              </div>
-              <div v-if="a.allowed_client_types">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">客户端限制</p>
-                <p class="text-sm truncate text-amber-600">仅 {{ a.allowed_client_types.split(',').filter(Boolean).join(' / ') }}</p>
-              </div>
-              <div>
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">自动遥测</p>
-                <p class="text-sm" :class="a.auto_telemetry ? 'text-emerald-600' : 'text-[#8c8475]'">
-                  {{ a.auto_telemetry ? '已开启' : '关闭' }}
-                  <span v-if="a.telemetry_count > 0" class="text-[#b5b0a6] text-xs">· 已发送 {{ a.telemetry_count }} 次</span>
-                </p>
-                <p v-if="a.telemetry_expires_at" class="text-xs text-amber-500 mt-0.5">
-                  遥测中 · 停止于 {{ new Date(a.telemetry_expires_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }}
-                </p>
-              </div>
-              <div v-if="a.auth_type === 'oauth' && a.auth_error">
-                <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider mb-0.5">认证错误</p>
-                <p class="text-xs text-red-500 line-clamp-2">{{ a.auth_error }}</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- 用量窗口 -->
-          <div class="pt-2 border-t border-[#f0ebe4] space-y-2">
-            <div class="flex items-center justify-between">
-              <p class="text-[10px] text-[#b5b0a6] uppercase tracking-wider">用量</p>
-              <p v-if="a.usage_fetched_at" class="text-[10px] text-[#b5b0a6]">
-                {{ new Date(a.usage_fetched_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}
+              <p
+                v-if="a.disable_reason && (a.status === 'disabled' || isRateLimited(a))"
+                class="text-[11px] mt-1 max-w-[220px] truncate"
+                :class="a.status === 'disabled' ? 'text-red-600' : 'text-amber-600'"
+              >
+                {{ a.disable_reason }}<span v-if="isRateLimited(a)"> · 剩余 {{ formatTimeLeft(a.rate_limit_reset_at!) }}</span>
               </p>
-              <p v-else class="text-[10px] text-[#b5b0a6]">未刷新</p>
-            </div>
-            <!-- 5 小时 -->
-            <div class="space-y-0.5">
-              <div class="flex justify-between text-[11px]">
-                <span class="text-[#8c8475]">5 小时</span>
-                <span class="text-[#5c5647] font-medium">{{ a.usage_data?.five_hour ? Math.round(a.usage_data.five_hour.utilization) : '0' }}%
-                  <span v-if="a.usage_data?.five_hour" class="text-[#b5b0a6] font-normal">· {{ formatTimeLeft(a.usage_data.five_hour.resets_at) }}</span>
-                </span>
+              <p v-if="a.auth_type === 'oauth' && a.auth_error" class="text-[11px] text-red-500 mt-0.5 max-w-[220px] truncate">{{ a.auth_error }}</p>
+              <p
+                v-if="testing === a.id && testResult"
+                class="text-[11px] mt-0.5 font-medium"
+                :class="testResult.status === 'ok' ? 'text-emerald-600' : 'text-red-500'"
+              >
+                {{ testResult.status === 'ok' ? '连接正常' : testResult.message }}
+              </p>
+            </TableCell>
+            <!-- 状态 -->
+            <TableCell class="py-2.5">
+              <Badge :class="statusStyle(a).class" class="border text-xs font-medium">
+                {{ statusStyle(a).label }}
+              </Badge>
+            </TableCell>
+            <!-- 并发 -->
+            <TableCell class="py-2.5 text-sm font-medium" :class="(a.current_concurrency || 0) >= a.concurrency ? 'text-red-500' : (a.current_concurrency || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
+              {{ a.current_concurrency || 0 }} / {{ a.concurrency }}
+            </TableCell>
+            <!-- 会话 -->
+            <TableCell class="py-2.5 text-sm font-medium" :class="a.max_sessions && (a.current_sessions || 0) >= a.max_sessions ? 'text-red-500' : (a.current_sessions || 0) > 0 ? 'text-emerald-600' : 'text-[#29261e]'">
+              {{ a.current_sessions || 0 }} / {{ a.max_sessions || '∞' }}
+            </TableCell>
+            <!-- RPM（实时） -->
+            <TableCell class="py-2.5">
+              <div v-if="a.rpm_limit && a.rpm_limit > 0" class="flex items-center gap-1.5 min-w-[88px]">
+                <div class="w-12 bg-[#f0ebe4] rounded-full h-1.5 overflow-hidden flex-shrink-0">
+                  <div
+                    class="h-full rounded-full transition-all"
+                    :class="(a.current_rpm || 0) / a.rpm_limit >= 0.8 ? 'bg-red-500' : (a.current_rpm || 0) / a.rpm_limit >= 0.5 ? 'bg-amber-500' : 'bg-emerald-500'"
+                    :style="{ width: Math.min(100, ((a.current_rpm || 0) / a.rpm_limit) * 100) + '%' }"
+                  />
+                </div>
+                <span class="text-xs whitespace-nowrap" :class="(a.current_rpm || 0) > 0 ? 'text-[#29261e] font-medium' : 'text-[#8c8475]'">{{ a.current_rpm || 0 }}/{{ a.rpm_limit }}</span>
               </div>
-              <div class="h-1.5 bg-[#f0ebe4] rounded-full overflow-hidden">
-                <div :class="usageBarColor(a.usage_data?.five_hour ? a.usage_data.five_hour.utilization : 0)"
-                  class="h-full rounded-full transition-all duration-300"
-                  :style="{ width: (a.usage_data?.five_hour ? Math.min(a.usage_data.five_hour.utilization, 100) : 0) + '%' }" />
+              <span v-else class="text-sm" :class="(a.current_rpm || 0) > 0 ? 'text-emerald-600 font-medium' : 'text-[#8c8475]'">{{ a.current_rpm || 0 }}</span>
+            </TableCell>
+            <!-- 用量 5h/7d/Sonnet -->
+            <TableCell class="py-2.5">
+              <div class="text-[11px] space-y-0.5 min-w-[112px]">
+                <div v-for="w in [
+                  { label: '5h', d: a.usage_data?.five_hour },
+                  { label: '7d', d: a.usage_data?.seven_day },
+                  { label: 'Son', d: a.usage_data?.seven_day_sonnet },
+                ]" :key="w.label" class="flex items-center gap-1.5">
+                  <span class="text-[#b5b0a6] w-6 flex-shrink-0">{{ w.label }}</span>
+                  <div class="flex-1 h-1 bg-[#f0ebe4] rounded-full overflow-hidden">
+                    <div :class="usageBarColor(w.d ? w.d.utilization : 0)" class="h-full rounded-full" :style="{ width: (w.d ? Math.min(w.d.utilization, 100) : 0) + '%' }" />
+                  </div>
+                  <span class="text-[#5c5647] font-medium w-8 text-right flex-shrink-0">{{ w.d ? Math.round(w.d.utilization) : 0 }}%</span>
+                </div>
               </div>
-            </div>
-            <!-- 7 天 -->
-            <div class="space-y-0.5">
-              <div class="flex justify-between text-[11px]">
-                <span class="text-[#8c8475]">7 天</span>
-                <span class="text-[#5c5647] font-medium">{{ a.usage_data?.seven_day ? Math.round(a.usage_data.seven_day.utilization) : '0' }}%
-                  <span v-if="a.usage_data?.seven_day" class="text-[#b5b0a6] font-normal">· {{ formatTimeLeft(a.usage_data.seven_day.resets_at) }}</span>
-                </span>
+            </TableCell>
+            <!-- 身份/遥测 -->
+            <TableCell class="py-2.5">
+              <div class="text-[11px] space-y-0.5 max-w-[150px]">
+                <p class="truncate" :class="a.identity_mode === 'normalize' ? 'text-emerald-600' : 'text-[#8c8475]'">
+                  {{ a.identity_mode === 'normalize' ? '归一化' : '透传' }}
+                  <span v-if="a.identity_mode === 'normalize' && a.identity_captured_at" class="text-[#b5b0a6]">v{{ a.canonical_env?.version }}</span>
+                  <span v-else-if="a.identity_mode === 'normalize'" class="text-amber-500">待吸取</span>
+                </p>
+                <p :class="a.auto_telemetry ? 'text-emerald-600' : 'text-[#8c8475]'">
+                  遥测{{ a.auto_telemetry ? '开' : '关' }}<span v-if="a.telemetry_count > 0" class="text-[#b5b0a6]"> ·{{ a.telemetry_count }}</span>
+                </p>
+                <p v-if="a.allowed_client_types" class="text-amber-600 truncate">仅 {{ a.allowed_client_types.split(',').filter(Boolean).join('/') }}</p>
               </div>
-              <div class="h-1.5 bg-[#f0ebe4] rounded-full overflow-hidden">
-                <div :class="usageBarColor(a.usage_data?.seven_day ? a.usage_data.seven_day.utilization : 0)"
-                  class="h-full rounded-full transition-all duration-300"
-                  :style="{ width: (a.usage_data?.seven_day ? Math.min(a.usage_data.seven_day.utilization, 100) : 0) + '%' }" />
+            </TableCell>
+            <!-- 配置 -->
+            <TableCell class="py-2.5">
+              <div class="text-[11px] space-y-0.5">
+                <p class="text-[#5c5647]">优先级 {{ a.priority }}</p>
+                <p :class="a.billing_mode === 'rewrite' ? 'text-amber-600' : 'text-[#8c8475]'">{{ a.billing_mode === 'rewrite' ? '重写' : '清除' }}</p>
               </div>
-            </div>
-            <!-- 7 天 Sonnet -->
-            <div class="space-y-0.5">
-              <div class="flex justify-between text-[11px]">
-                <span class="text-[#8c8475]">7 天 Sonnet</span>
-                <span class="text-[#5c5647] font-medium">{{ a.usage_data?.seven_day_sonnet ? Math.round(a.usage_data.seven_day_sonnet.utilization) : '0' }}%
-                  <span v-if="a.usage_data?.seven_day_sonnet" class="text-[#b5b0a6] font-normal">· {{ formatTimeLeft(a.usage_data.seven_day_sonnet.resets_at) }}</span>
-                </span>
+            </TableCell>
+            <!-- 操作 -->
+            <TableCell class="py-2.5">
+              <div class="flex items-center justify-end gap-0.5">
+                <Button variant="ghost" size="sm" @click="toggleScheduling(a)"
+                  :class="(a.status === 'disabled' || isRateLimited(a)) ? 'text-emerald-500 hover:text-emerald-600 hover:bg-emerald-50' : 'text-amber-500 hover:text-amber-600 hover:bg-amber-50'"
+                  class="h-7 px-2 text-xs">
+                  {{ (a.status === 'disabled' || isRateLimited(a)) ? '启用' : '停用' }}
+                </Button>
+                <Button variant="ghost" size="sm" @click="openEdit(a)" class="text-[#8c8475] hover:text-[#29261e] hover:bg-[#f0ebe4] h-7 px-2 text-xs">编辑</Button>
+                <Button variant="ghost" size="sm" @click="refreshUsage(a.id)" :disabled="refreshingUsage === a.id" class="text-[#c4704f] hover:text-[#b5623f] hover:bg-[#c4704f]/5 h-7 px-2 text-xs">
+                  {{ refreshingUsage === a.id ? '...' : '用量' }}
+                </Button>
+                <Button variant="ghost" size="sm" @click="test(a.id)" :disabled="testing === a.id" class="text-[#c4704f] hover:text-[#b5623f] hover:bg-[#c4704f]/5 h-7 px-2 text-xs">
+                  {{ testing === a.id ? '...' : '测试' }}
+                </Button>
+                <Button variant="ghost" size="sm" @click="confirmDelete(a.id)" class="text-red-400 hover:text-red-500 hover:bg-red-50 h-7 px-2 text-xs">删除</Button>
               </div>
-              <div class="h-1.5 bg-[#f0ebe4] rounded-full overflow-hidden">
-                <div :class="usageBarColor(a.usage_data?.seven_day_sonnet ? a.usage_data.seven_day_sonnet.utilization : 0)"
-                  class="h-full rounded-full transition-all duration-300"
-                  :style="{ width: (a.usage_data?.seven_day_sonnet ? Math.min(a.usage_data.seven_day_sonnet.utilization, 100) : 0) + '%' }" />
+            </TableCell>
+          </TableRow>
+          <!-- 空状态 -->
+          <TableRow v-if="sortedAccounts.length === 0" class="hover:bg-transparent border-0">
+            <TableCell colspan="9" class="py-16">
+              <div class="flex flex-col items-center justify-center text-[#b5b0a6]">
+                <div class="w-12 h-12 rounded-xl bg-[#f0ebe4] flex items-center justify-center mb-3">
+                  <svg class="w-6 h-6 text-[#c4704f]/50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
+                  </svg>
+                </div>
+                <p class="text-sm">暂无账号，点击"添加账号"开始</p>
               </div>
-            </div>
-          </div>
-
-          <!-- 停用原因 -->
-          <div
-            v-if="a.disable_reason && (a.status === 'disabled' || (a.rate_limit_reset_at && new Date(a.rate_limit_reset_at) > new Date()))"
-            class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border"
-            :class="a.status === 'disabled' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'"
-          >
-            <span class="text-xs font-medium" :class="a.status === 'disabled' ? 'text-red-600' : 'text-amber-700'">
-              {{ a.disable_reason }}
-            </span>
-            <span v-if="a.rate_limit_reset_at && new Date(a.rate_limit_reset_at) > new Date()" class="text-xs text-amber-500">
-              · 剩余 {{ formatTimeLeft(a.rate_limit_reset_at) }}
-            </span>
-          </div>
-
-          <!-- 测试结果 -->
-          <div
-            v-if="testing === a.id && testResult"
-            class="text-xs font-medium px-2 py-1 rounded-lg text-center"
-            :class="testResult.status === 'ok' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'"
-          >
-            {{ testResult.status === 'ok' ? '连接正常' : testResult.message }}
-          </div>
-
-          <!-- 操作按钮 -->
-          <div class="flex items-center gap-2 pt-2 border-t border-[#f0ebe4]">
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="toggleScheduling(a)"
-              :class="(a.status === 'disabled' || isRateLimited(a))
-                ? 'text-emerald-500 hover:text-emerald-600 hover:bg-emerald-50'
-                : 'text-amber-500 hover:text-amber-600 hover:bg-amber-50'"
-              class="h-8 px-3 text-xs flex-1"
-            >
-              {{ (a.status === 'disabled' || isRateLimited(a)) ? '启用' : '停用' }}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="openEdit(a)"
-              class="text-[#8c8475] hover:text-[#29261e] hover:bg-[#f0ebe4] h-8 px-3 text-xs flex-1"
-            >
-              编辑
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="refreshUsage(a.id)"
-              :disabled="refreshingUsage === a.id"
-              class="text-[#c4704f] hover:text-[#b5623f] hover:bg-[#c4704f]/5 h-8 px-3 text-xs flex-1"
-            >
-              {{ refreshingUsage === a.id ? '刷新中...' : '用量' }}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="test(a.id)"
-              :disabled="testing === a.id"
-              class="text-[#c4704f] hover:text-[#b5623f] hover:bg-[#c4704f]/5 h-8 px-3 text-xs flex-1"
-            >
-              {{ testing === a.id ? '测试中...' : '测试' }}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              @click="confirmDelete(a.id)"
-              class="text-red-400 hover:text-red-500 hover:bg-red-50 h-8 px-3 text-xs flex-1"
-            >
-              删除
-            </Button>
-          </div>
-        </div>
-      </Card>
-
-      <!-- 空状态 -->
-      <div
-        v-if="accounts.length === 0"
-        class="col-span-full flex flex-col items-center justify-center py-16 text-[#b5b0a6]"
-      >
-        <div class="w-12 h-12 rounded-xl bg-[#f0ebe4] flex items-center justify-center mb-3">
-          <svg class="w-6 h-6 text-[#c4704f]/50" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
-          </svg>
-        </div>
-        <p class="text-sm">暂无账号，点击"添加账号"开始</p>
-      </div>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
     </div>
 
     <!-- 分页 -->

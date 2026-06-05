@@ -378,6 +378,9 @@ impl GatewayService {
                 exclude_ids.push(account.id);
                 rpm_rejected.push(account.id);
                 continue;
+            } else if rpm_limit <= 0 {
+                // 未配置限速的账号也计当前分钟 RPM（仅用于面板观测，不限流）。
+                self.account_svc.incr_rpm(account.id).await;
             }
 
             // 获取并发槽位
