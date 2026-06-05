@@ -4,7 +4,9 @@ import { useAuth } from './auth';
 import { Layout } from './components/Layout';
 import Login from './pages/Login';
 import Accounts from './pages/Accounts';
-import Placeholder from './pages/Placeholder';
+import Tokens from './pages/Tokens';
+import Usage from './pages/Usage';
+import Settings from './pages/Settings';
 
 function Splash() {
   return (
@@ -23,9 +25,9 @@ export default function App() {
       <Route path="/login" element={authed ? <Navigate to="/" replace /> : <Login />} />
       <Route path="/" element={authed ? <Layout /> : <Navigate to="/login" replace />}>
         <Route index element={<Accounts />} />
-        <Route path="tokens" element={<Placeholder title="令牌管理" />} />
-        <Route path="usage" element={<Placeholder title="调用记录" />} />
-        <Route path="settings" element={<Placeholder title="设置" />} />
+        <Route path="tokens" element={<Tokens />} />
+        <Route path="usage" element={<Usage />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
