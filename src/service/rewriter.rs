@@ -116,12 +116,17 @@ fn beta_header_for_model(model_id: &str) -> &'static str {
     let lower = model_id.to_lowercase();
     if lower.contains("haiku") {
         // haiku 辅助请求用较小集合（不含 1M 上下文等重特性）
-        "claude-code-20250219,interleaved-thinking-2025-05-14"
+        // cache-diagnosis-2026-04-07：与主集合同理 —— 新版 CC 的 diagnostics 字段按进程级
+        // 发送,haiku 辅助请求也可能带,normalize 覆盖后若缺此开关同样会被上游 400。
+        "claude-code-20250219,interleaved-thinking-2025-05-14,cache-diagnosis-2026-04-07"
     } else {
         // 去掉 context-1m-2025-08-07：1M 长上下文是计费功能,订阅号无额度会 429
         // "Usage credits are required for long context requests"。去掉后 CC 视窗口为 20 万,
         // 长对话自动压缩、不再卡死(与 sub2api 模板一致)。
-        "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
+        // cache-diagnosis-2026-04-07：新版 CC 会在 body 里带顶层 diagnostics 字段,该字段由此
+        // beta 开关 gate;normalize 模式会用本列表覆盖客户端 anthropic-beta,若不带此开关,
+        // 上游会拒绝 "diagnostics: Extra inputs are not permitted"(400)。
+        "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,cache-diagnosis-2026-04-07"
     }
 }
 
