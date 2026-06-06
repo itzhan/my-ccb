@@ -118,6 +118,18 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
+    // 5h 滚动窗口的消费上限(USD);0 表示不限制
+    sqlx::query(
+        "ALTER TABLE accounts ADD COLUMN window_5h_cost_cap_usd REAL NOT NULL DEFAULT 0",
+    )
+    .execute(pool)
+    .await
+    .ok();
+    // normalize 模式下路径处理:''=回退全局默认 / simulate / passthrough
+    sqlx::query("ALTER TABLE accounts ADD COLUMN path_mode TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
 
     // api_tokens 表
     let token_schema = if driver == "sqlite" { SQLITE_TOKENS_SCHEMA } else { PG_TOKENS_SCHEMA };

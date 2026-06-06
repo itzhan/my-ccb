@@ -80,8 +80,14 @@ async fn flush(pool: &AnyPool, buf: &mut Vec<UsageRecord>) {
     if buf.is_empty() {
         return;
     }
+    // 记下涉及的账号 id,刷盘后失效 5h cost 缓存,确保下次选号读到新值
+    let touched: std::collections::HashSet<i64> =
+        buf.iter().map(|r| r.account_id).filter(|id| *id > 0).collect();
     if let Err(e) = usage_store::batch_insert_and_rollup(pool, buf).await {
         warn!("usage batch insert failed ({} rows): {}", buf.len(), e);
+    }
+    for id in touched {
+        crate::service::account::invalidate_cost_cache(id);
     }
     buf.clear();
 }

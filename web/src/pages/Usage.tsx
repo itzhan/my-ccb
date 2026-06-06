@@ -2,6 +2,8 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, ChevronDown, RotateCcw } from 'lucide-react';
 import { api, type UsageLog, type UsageStat, type Account, type ApiToken } from '@/api';
 import { cn } from '@/lib/utils';
+import { calculateCost, fmtCost } from '@/lib/pricing';
+import { usePolling } from '@/hooks/usePolling';
 import { Button } from '@/components/ui/button';
 import { BlurFade } from '@/components/magic/blur-fade';
 
@@ -9,6 +11,15 @@ const PAGE_SIZE = 50;
 const selectCls = 'h-9 rounded-lg border border-neutral-200 bg-white px-2 text-sm text-neutral-700 focus:outline-none focus:ring-2 focus:ring-ring/30';
 const fmt = (n: number) => (n ?? 0).toLocaleString('en-US');
 const todayUtc = () => new Date().toISOString().slice(0, 10);
+// 账号名只显示前几个字符,省空间
+const truncName = (s: string, n = 6) => (s.length > n ? s.slice(0, n) + '…' : s);
+const rowCost = (r: UsageLog) => {
+  // SSE usage 若未区分 5m/1h,把合并的 cache_creation 当作 5m 缓存写入
+  let cw5m = r.cache_creation_5m_tokens || 0;
+  const cw1h = r.cache_creation_1h_tokens || 0;
+  if (cw5m === 0 && cw1h === 0) cw5m = r.cache_creation_tokens || 0;
+  return calculateCost(r.model, r.input_tokens, r.output_tokens, cw5m, cw1h, r.cache_read_tokens);
+};
 function pretty(s: string): string {
   if (!s) return '';
   try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; }
@@ -64,7 +75,7 @@ export default function Usage() {
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
 
-  // 初始化:账号/令牌/模型/汇总
+  // 初始化:账号/令牌/模型(基本不变,无需轮询)
   useEffect(() => {
     (async () => {
       try {
@@ -72,18 +83,21 @@ export default function Usage() {
         setAccounts(accRes.data ?? []); setTokens(tokRes.data ?? []);
       } catch { /* ignore */ }
       try { setModels(((await api.getUsageStats({ group_by: 'model' })).data ?? []).map((d) => d.key).filter(Boolean)); } catch { /* ignore */ }
-      try {
-        const [t, a] = await Promise.all([
-          api.getUsageStats({ group_by: 'total', start: todayUtc(), end: todayUtc() }),
-          api.getUsageStats({ group_by: 'total' }),
-        ]);
-        setTodayStat(t.data?.[0] ?? null); setAllStat(a.data?.[0] ?? null);
-      } catch { /* ignore */ }
     })();
   }, []);
 
-  const loadLogs = useCallback(async () => {
-    setLoading(true);
+  const loadStats = useCallback(async () => {
+    try {
+      const [t, a] = await Promise.all([
+        api.getUsageStats({ group_by: 'total', start: todayUtc(), end: todayUtc() }),
+        api.getUsageStats({ group_by: 'total' }),
+      ]);
+      setTodayStat(t.data?.[0] ?? null); setAllStat(a.data?.[0] ?? null);
+    } catch { /* ignore */ }
+  }, []);
+
+  const loadLogs = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await api.getUsageLogs({
         page, page_size: PAGE_SIZE,
@@ -96,11 +110,13 @@ export default function Usage() {
       });
       setLogs(res.data ?? []); setTotal(res.total ?? 0);
     } catch { setLogs([]); setTotal(0); }
-    setLoading(false);
+    finally { if (!silent) setLoading(false); }
   }, [page, fAccount, fToken, fModel, fResult, fStart, fEnd]);
 
-  // 任意筛选/翻页变化自动查询
+  // 任意筛选/翻页变化:带加载态查询
   useEffect(() => { loadLogs(); }, [loadLogs]);
+  // 实时刷新:每 5 秒静默拉取最新记录与汇总(不闪烁加载态)
+  usePolling(() => { loadLogs(true); loadStats(); }, 5000);
 
   function reset() {
     setFAccount(''); setFToken(''); setFModel(''); setFResult(''); setFStart(''); setFEnd(''); setPage(1);
@@ -143,13 +159,14 @@ export default function Usage() {
                   <th className="px-4 py-3 text-right font-medium">输出</th>
                   <th className="px-4 py-3 text-right font-medium">缓存读</th>
                   <th className="px-4 py-3 text-right font-medium">缓存创建</th>
+                  <th className="px-4 py-3 text-right font-medium">扣费</th>
                   <th className="px-4 py-3 text-right font-medium">耗时</th>
                   <th className="px-4 py-3 text-right font-medium">状态</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && <tr><td colSpan={10} className="px-4 py-8 text-center text-neutral-500">加载中…</td></tr>}
-                {!loading && logs.length === 0 && <tr><td colSpan={10} className="px-4 py-8 text-center text-neutral-500">暂无调用记录</td></tr>}
+                {loading && <tr><td colSpan={11} className="px-4 py-8 text-center text-neutral-500">加载中…</td></tr>}
+                {!loading && logs.length === 0 && <tr><td colSpan={11} className="px-4 py-8 text-center text-neutral-500">暂无调用记录</td></tr>}
                 {!loading && logs.map((r) => {
                   const ok = r.status_code >= 200 && r.status_code < 300;
                   const open = expanded === r.id;
@@ -161,18 +178,19 @@ export default function Usage() {
                           {new Date(r.created_at).toLocaleString()}
                         </td>
                         <td className="px-4 py-2.5 text-neutral-500">{tokenName(r.token_id)}</td>
-                        <td className="px-4 py-2.5 text-neutral-500">{accountName(r.account_id)}</td>
+                        <td className="px-4 py-2.5 text-neutral-500" title={accountName(r.account_id)}>{truncName(accountName(r.account_id))}</td>
                         <td className="px-4 py-2.5 text-neutral-800">{r.model || '-'}{r.stream && <span className="ml-1 text-[10px] text-indigo-500">流</span>}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-neutral-800">{fmt(r.input_tokens)}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-neutral-800">{fmt(r.output_tokens)}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-indigo-600">{fmt(r.cache_read_tokens)}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-indigo-600">{fmt(r.cache_creation_tokens)}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-medium text-amber-600">{fmtCost(rowCost(r))}</td>
                         <td className="px-4 py-2.5 text-right text-neutral-500">{r.duration_ms}ms</td>
                         <td className={cn('px-4 py-2.5 text-right font-medium', ok ? 'text-emerald-600' : 'text-red-500')}>{r.status_code}</td>
                       </tr>
                       {open && (
                         <tr className="border-b border-neutral-100 bg-neutral-50/60">
-                          <td colSpan={10} className="px-4 pb-4 pt-1">
+                          <td colSpan={11} className="px-4 pb-4 pt-1">
                             {r.error && (
                               <div className="mb-3">
                                 <p className="mb-1 text-[10px] uppercase tracking-wider text-neutral-400">错误正文</p>

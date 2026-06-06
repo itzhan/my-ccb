@@ -29,6 +29,27 @@ function rpmColor(a: Account): string {
   return (a.current_rpm || 0) > 0 ? 'text-emerald-600' : 'text-muted-foreground';
 }
 
+function costRatio(a: Account): number {
+  if (!a.window_5h_cost_cap_usd || a.window_5h_cost_cap_usd <= 0) return 0;
+  return Math.min(1, (a.cost_5h_usd || 0) / a.window_5h_cost_cap_usd);
+}
+
+function costColor(ratio: number, hasCap: boolean): string {
+  if (!hasCap) return 'text-neutral-600';
+  if (ratio >= 1) return 'text-red-600';
+  if (ratio >= 0.85) return 'text-red-500';
+  if (ratio >= 0.6) return 'text-amber-600';
+  if (ratio > 0) return 'text-emerald-600';
+  return 'text-muted-foreground';
+}
+
+function costBarColor(ratio: number): string {
+  if (ratio >= 1) return 'bg-red-600';
+  if (ratio >= 0.85) return 'bg-red-500';
+  if (ratio >= 0.6) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
 export default function Accounts() {
   const toast = useToast();
   const refreshDashboard = useDashboardRefresh();
@@ -139,9 +160,11 @@ export default function Accounts() {
         u.identity_mode = form.identity_mode;
         u.virtual_user = form.virtual_user;
         u.virtual_git_name = form.virtual_git_name;
+        u.path_mode = form.path_mode;
         u.recapture_days = Number(form.recapture_days) || 0;
         u.max_sessions = Math.max(0, Number(form.max_sessions) || 0);
         u.allowed_client_types = form.allowed_client_types.join(',');
+        u.window_5h_cost_cap_usd = Math.max(0, Number(form.window_5h_cost_cap_usd) || 0);
         await api.updateAccount(editing.id, u);
       } else {
         if (form.auth_type === 'setup_token' && !form.setup_token.trim()) throw new Error('Setup Token 不能为空');
@@ -155,9 +178,11 @@ export default function Accounts() {
           concurrency: form.concurrency, priority: form.priority, auto_telemetry: form.auto_telemetry,
           rpm_limit: form.rpm_limit || 0, identity_mode: form.identity_mode,
           virtual_user: form.virtual_user, virtual_git_name: form.virtual_git_name,
+          path_mode: form.path_mode,
           recapture_days: Number(form.recapture_days) || 0,
           max_sessions: Math.max(0, Number(form.max_sessions) || 0),
           allowed_client_types: form.allowed_client_types.join(','),
+          window_5h_cost_cap_usd: Math.max(0, Number(form.window_5h_cost_cap_usd) || 0),
         };
         if (expiresAt) p.expires_at = Number(expiresAt);
         await api.createAccount(p);
@@ -252,6 +277,7 @@ export default function Accounts() {
                 <TableHead>并发</TableHead>
                 <TableHead>会话</TableHead>
                 <TableHead>RPM</TableHead>
+                <TableHead>5h 配额 ($)</TableHead>
                 <TableHead>用量(5h/7d/Son · 重置)</TableHead>
                 <TableHead>身份/遥测</TableHead>
                 <TableHead>配置</TableHead>
@@ -299,6 +325,27 @@ export default function Accounts() {
                       <span className={cn('text-sm font-medium tabular-nums', rpmColor(a))}>
                         {a.current_rpm || 0}{a.rpm_limit && a.rpm_limit > 0 ? ` / ${a.rpm_limit}` : ''}
                       </span>
+                    </TableCell>
+                    {/* 5h 配额(USD) */}
+                    <TableCell>
+                      {(() => {
+                        const hasCap = !!(a.window_5h_cost_cap_usd && a.window_5h_cost_cap_usd > 0);
+                        const ratio = costRatio(a);
+                        const cost = a.cost_5h_usd || 0;
+                        return (
+                          <div className="min-w-[110px] space-y-1">
+                            <span className={cn('text-sm font-medium tabular-nums', costColor(ratio, hasCap))}>
+                              ${cost.toFixed(cost >= 100 ? 0 : 2)}
+                              {hasCap ? ` / $${a.window_5h_cost_cap_usd}` : ''}
+                            </span>
+                            {hasCap && (
+                              <div className="h-1 w-20 overflow-hidden rounded-full bg-neutral-100">
+                                <div className={cn('h-full rounded-full', costBarColor(ratio))} style={{ width: `${ratio * 100}%` }} />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </TableCell>
                     {/* 用量 + 重置时间 */}
                     <TableCell>
@@ -358,7 +405,7 @@ export default function Accounts() {
               })}
               {pageItems.length === 0 && (
                 <TableRow className="border-0 hover:bg-transparent">
-                  <TableCell colSpan={9} className="py-16">
+                  <TableCell colSpan={10} className="py-16">
                     <div className="flex flex-col items-center justify-center text-neutral-400">
                       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-neutral-100"><Users className="h-6 w-6 text-indigo-400" /></div>
                       <p className="text-sm">{allAccounts.length === 0 ? '暂无账号，点击"添加账号"开始' : '没有匹配的账号'}</p>

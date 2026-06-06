@@ -13,6 +13,8 @@ pub struct Config {
     pub client_restriction: String,
     /// 身份模式：passthrough（默认，单人，原样透传）/ normalize（多人共号，归一化为账号虚拟身份）。
     pub identity_mode: String,
+    /// normalize 模式下的路径处理全局默认：simulate（默认，改写真实路径用户名）/ passthrough（真实路径原样透传）。
+    pub path_mode: String,
 }
 
 #[derive(Clone)]
@@ -118,6 +120,7 @@ impl Config {
             ),
             client_restriction: env::var("CLIENT_RESTRICTION").unwrap_or_else(|_| "off".into()),
             identity_mode: env::var("IDENTITY_MODE").unwrap_or_else(|_| "passthrough".into()),
+            path_mode: env::var("PATH_MODE").unwrap_or_else(|_| "simulate".into()),
         }
     }
 }

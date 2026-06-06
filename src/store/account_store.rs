@@ -120,12 +120,17 @@ impl AccountStore {
             identity_mode: row.try_get::<String, _>("identity_mode").unwrap_or_default(),
             virtual_user: row.try_get::<String, _>("virtual_user").unwrap_or_default(),
             virtual_git_name: row.try_get::<String, _>("virtual_git_name").unwrap_or_default(),
+            path_mode: row.try_get::<String, _>("path_mode").unwrap_or_default(),
             identity_captured_at: Self::parse_optional_time(row, "identity_captured_at"),
             recapture_days: row.try_get::<i64, _>("recapture_days").unwrap_or(0),
             max_sessions: row.try_get::<i32, _>("max_sessions").unwrap_or(3),
             allowed_client_types: row
                 .try_get::<String, _>("allowed_client_types")
                 .unwrap_or_default(),
+            window_5h_cost_cap_usd: {
+                let v = row.try_get::<f64, _>("window_5h_cost_cap_usd").unwrap_or(0.0);
+                if v > 0.0 { Some(v) } else { None }
+            },
             created_at: Self::parse_time(row, "created_at"),
             updated_at: Self::parse_time(row, "updated_at"),
         }
@@ -157,6 +162,7 @@ impl AccountStore {
 
         let auto_telemetry_int: i32 = if a.auto_telemetry { 1 } else { 0 };
         let rpm_limit_val: i32 = a.rpm_limit.unwrap_or(0);
+        let window_5h_cap_val: f64 = a.window_5h_cost_cap_usd.unwrap_or(0.0);
         let q = format!(
             r#"INSERT INTO accounts (name, email, status, token, proxy_url,
                 auth_type, access_token, refresh_token, oauth_expires_at, oauth_refreshed_at, auth_error,
@@ -164,8 +170,8 @@ impl AccountStore {
                 billing_mode, account_uuid, organization_uuid, subscription_type,
                 concurrency, priority, auto_telemetry, rpm_limit,
                 identity_mode, virtual_user, virtual_git_name, recapture_days, max_sessions,
-                allowed_client_types)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
+                allowed_client_types, window_5h_cost_cap_usd, path_mode)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
             RETURNING id, created_at, updated_at"#,
             self.ts(9), self.ts(10), "$11"
         );
@@ -199,6 +205,8 @@ impl AccountStore {
         .bind(a.recapture_days)
         .bind(a.max_sessions)
         .bind(&a.allowed_client_types)
+        .bind(window_5h_cap_val)
+        .bind(&a.path_mode)
         .fetch_one(&self.pool)
         .await?;
 
@@ -213,6 +221,7 @@ impl AccountStore {
         let oauth_refreshed_at = a.oauth_refreshed_at.map(|t| self.fmt_time(t));
         let auto_telemetry_int: i32 = if a.auto_telemetry { 1 } else { 0 };
         let rpm_limit_val: i32 = a.rpm_limit.unwrap_or(0);
+        let window_5h_cap_val: f64 = a.window_5h_cost_cap_usd.unwrap_or(0.0);
         let q = format!(
             r#"UPDATE accounts SET name=$1, email=$2, status=$3, token=$4,
                 auth_type=$5, access_token=$6, refresh_token=$7, oauth_expires_at={}, oauth_refreshed_at={},
@@ -220,8 +229,8 @@ impl AccountStore {
                 account_uuid=$13, organization_uuid=$14, subscription_type=$15,
                 concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19,
                 identity_mode=$20, virtual_user=$21, virtual_git_name=$22, recapture_days=$23,
-                max_sessions=$24, allowed_client_types=$25, updated_at={}
-            WHERE id=$26"#,
+                max_sessions=$24, allowed_client_types=$25, window_5h_cost_cap_usd=$26, path_mode=$27, updated_at={}
+            WHERE id=$28"#,
             self.ts(8), self.ts(9), self.now_expr()
         );
         sqlx::query(&q)
@@ -250,6 +259,8 @@ impl AccountStore {
             .bind(a.recapture_days)
             .bind(a.max_sessions)
             .bind(&a.allowed_client_types)
+            .bind(window_5h_cap_val)
+            .bind(&a.path_mode)
             .bind(a.id)
             .execute(&self.pool)
             .await?;
@@ -483,6 +494,70 @@ impl AccountStore {
         Ok(())
     }
 
+    /// 计算指定账号"当前 5 小时窗口"内的累计消费(USD)。
+    ///
+    /// 窗口起始时间用 Anthropic 官方 `usage_data.five_hour.resets_at` 对齐
+    /// (resets_at - 5h)。这与 Anthropic 的真实窗口模型一致:首次请求触发 5h
+    /// 计时,期间累计,reset 后下一次请求才启动新窗口。
+    ///
+    /// 兜底:
+    /// - 没拉过 usage(resets_at 缺失) → 回退到滚动 5h
+    /// - resets_at 已过期 → 当前窗口未启动,返回 0
+    pub async fn compute_5h_cost_usd(&self, account_id: i64) -> Result<f64, AppError> {
+        // 取 usage_data 推断窗口起始
+        let usage_data_str: Option<String> =
+            sqlx::query_scalar("SELECT usage_data FROM accounts WHERE id=$1")
+                .bind(account_id)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()
+                .flatten();
+        let now = Utc::now();
+        let window_start = match window_start_from_usage_data(usage_data_str.as_deref(), now) {
+            WindowStart::Aligned(t) => t,
+            WindowStart::NewWindowNotStarted => return Ok(0.0),
+            WindowStart::FallbackRolling => now - chrono::Duration::hours(5),
+        };
+        let window_start_str = self.fmt_time(window_start);
+
+        let q = format!(
+            r#"SELECT model,
+                       COALESCE(SUM(input_tokens),0)             AS in_t,
+                       COALESCE(SUM(output_tokens),0)            AS out_t,
+                       COALESCE(SUM(cache_creation_5m_tokens),0) AS cw5,
+                       COALESCE(SUM(cache_creation_1h_tokens),0) AS cw1,
+                       COALESCE(SUM(cache_read_tokens),0)        AS cr_t,
+                       COALESCE(SUM(cache_creation_tokens),0)    AS cc_total
+                  FROM usage_logs
+                 WHERE account_id = $1
+                   AND status_code = 200
+                   AND created_at >= {}
+                 GROUP BY model"#,
+            self.ts(2)
+        );
+        let rows: Vec<AnyRow> = sqlx::query(&q)
+            .bind(account_id)
+            .bind(window_start_str)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut total = 0.0;
+        for row in rows.iter() {
+            let model: String = row.try_get("model").unwrap_or_default();
+            let in_t: i64 = row.try_get("in_t").unwrap_or(0);
+            let out_t: i64 = row.try_get("out_t").unwrap_or(0);
+            let cw5: i64 = row.try_get("cw5").unwrap_or(0);
+            let cw1: i64 = row.try_get("cw1").unwrap_or(0);
+            let cr_t: i64 = row.try_get("cr_t").unwrap_or(0);
+            let cc_total: i64 = row.try_get("cc_total").unwrap_or(0);
+            // 兜底:老数据只有合并的 cache_creation_tokens,把它当作 5m 缓存写入
+            let cw5_effective = if cw5 == 0 && cw1 == 0 { cc_total } else { cw5 };
+            total += crate::model::pricing::calculate_cost(
+                &model, in_t, out_t, cw5_effective, cw1, cr_t,
+            );
+        }
+        Ok(total)
+    }
+
     pub async fn list_schedulable(&self) -> Result<Vec<Account>, AppError> {
         let q = format!(
             r#"SELECT {} FROM accounts
@@ -497,6 +572,51 @@ impl AccountStore {
     }
 }
 
+/// 5h 窗口起始时间的判定结果。
+enum WindowStart {
+    /// 用 usage_data.five_hour.resets_at - 5h 算出对齐起始
+    Aligned(chrono::DateTime<Utc>),
+    /// 上一个窗口已 reset,新窗口未启动 → 当前 cost = 0
+    NewWindowNotStarted,
+    /// 没拉过 usage,回退到滚动 5h
+    FallbackRolling,
+}
+
+/// 从账号的 usage_data JSON 字符串解析 five_hour.resets_at,
+/// 推断当前 5h 窗口的起始时间。
+fn window_start_from_usage_data(
+    usage_data_json: Option<&str>,
+    now: chrono::DateTime<Utc>,
+) -> WindowStart {
+    let Some(s) = usage_data_json else {
+        return WindowStart::FallbackRolling;
+    };
+    let v: serde_json::Value = match serde_json::from_str(s) {
+        Ok(v) => v,
+        Err(_) => return WindowStart::FallbackRolling,
+    };
+    let resets_at_str = v
+        .get("five_hour")
+        .and_then(|x| x.get("resets_at"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if resets_at_str.is_empty() {
+        return WindowStart::FallbackRolling;
+    }
+    match chrono::DateTime::parse_from_rfc3339(resets_at_str) {
+        Ok(resets) => {
+            let resets_utc = resets.with_timezone(&Utc);
+            if resets_utc > now {
+                WindowStart::Aligned(resets_utc - chrono::Duration::hours(5))
+            } else {
+                // resets_at 已过去,意味着上个窗口已结束、新窗口未启动(下一次请求触发)
+                WindowStart::NewWindowNotStarted
+            }
+        }
+        Err(_) => WindowStart::FallbackRolling,
+    }
+}
+
 const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_token, refresh_token,
     oauth_expires_at, oauth_refreshed_at, auth_error, proxy_url, device_id,
     canonical_env, canonical_prompt_env, canonical_process,
@@ -505,6 +625,7 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     disable_reason, auto_telemetry, telemetry_count, rpm_limit,
     usage_data, usage_fetched_at, identity_mode, virtual_user, virtual_git_name,
     identity_captured_at, recapture_days, max_sessions, allowed_client_types,
+    window_5h_cost_cap_usd, path_mode,
     created_at, updated_at"#;
 
 #[cfg(test)]
@@ -520,6 +641,49 @@ mod tests {
             pool,
             driver: driver.to_string(),
         }
+    }
+
+    use chrono::TimeZone;
+
+    #[test]
+    fn window_aligned_when_resets_at_future() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 11, 0, 0).unwrap();
+        let json = r#"{"five_hour":{"utilization":70.0,"resets_at":"2026-06-05T13:40:00+00:00"}}"#;
+        match window_start_from_usage_data(Some(json), now) {
+            WindowStart::Aligned(t) => {
+                // resets 13:40 - 5h = 08:40
+                let expected = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 8, 40, 0).unwrap();
+                assert_eq!(t, expected);
+            }
+            _ => panic!("expected Aligned"),
+        }
+    }
+
+    #[test]
+    fn window_zero_when_resets_at_past() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 14, 0, 0).unwrap();
+        let json = r#"{"five_hour":{"utilization":70.0,"resets_at":"2026-06-05T13:40:00+00:00"}}"#;
+        assert!(matches!(
+            window_start_from_usage_data(Some(json), now),
+            WindowStart::NewWindowNotStarted
+        ));
+    }
+
+    #[test]
+    fn window_rolling_when_usage_missing() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 6, 5, 14, 0, 0).unwrap();
+        assert!(matches!(
+            window_start_from_usage_data(None, now),
+            WindowStart::FallbackRolling
+        ));
+        assert!(matches!(
+            window_start_from_usage_data(Some("{}"), now),
+            WindowStart::FallbackRolling
+        ));
+        assert!(matches!(
+            window_start_from_usage_data(Some(r#"{"five_hour":{}}"#), now),
+            WindowStart::FallbackRolling
+        ));
     }
 
     #[tokio::test]

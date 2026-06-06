@@ -202,6 +202,9 @@ pub struct Account {
     /// normalize 模式下的虚拟 git 用户名（留空则按账号自动派生）。
     #[serde(default)]
     pub virtual_git_name: String,
+    /// normalize 模式下的路径处理：空=回退全局默认 / "simulate"=改写真实路径用户名 / "passthrough"=真实路径原样透传。
+    #[serde(default)]
+    pub path_mode: String,
     /// 版本坐标(CC 版本/package/runtime)从首个真实请求吸取的时间；None=尚未吸取。
     #[serde(default)]
     pub identity_captured_at: Option<DateTime<Utc>>,
@@ -214,6 +217,10 @@ pub struct Account {
     /// 允许的客户端类型(逗号分隔: cli/vscode/sdk/desktop/other)；空=全部放行(默认)。
     #[serde(default)]
     pub allowed_client_types: String,
+    /// 5 小时滚动窗口的最大消费(USD,按官方价格表算)；0 或 None = 不限。
+    /// 触发后该账号自动跳过(其他号顶上),5h 窗口滚走后自动恢复。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_5h_cost_cap_usd: Option<f64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -226,6 +233,16 @@ impl Account {
     /// 是否启用 normalize 身份归一化。
     pub fn identity_normalize(&self) -> bool {
         self.identity_mode == "normalize"
+    }
+
+    /// normalize 模式下是否透传真实文件系统路径(不改写 home用户名/cwd/memory slug/Windows 路径)。
+    /// 账号自身 path_mode 优先；留空时回退全局默认 `global_passthrough`。
+    pub fn effective_path_passthrough(&self, global_passthrough: bool) -> bool {
+        match self.path_mode.as_str() {
+            "passthrough" => true,
+            "simulate" => false,
+            _ => global_passthrough,
+        }
     }
 
     /// 该账号是否放行某客户端类型分组(cli/vscode/sdk/desktop/other)。空配置=全部放行。

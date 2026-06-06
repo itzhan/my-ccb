@@ -98,6 +98,7 @@ async fn main() {
         telemetry_svc.clone(),
         client_restriction.clone(),
         cfg.identity_mode == "normalize",
+        cfg.path_mode == "passthrough",
         default_rpm_limit,
         usage_recorder.clone(),
     ));

@@ -161,9 +161,23 @@ export function AccountFormDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label>RPM 限制 <span className="text-xs text-muted-foreground">(0 = 不限)</span></Label>
-            <Input type="number" min={0} value={form.rpm_limit} onChange={(e) => patch({ rpm_limit: Number(e.target.value) })} placeholder="0" />
+          <div className="flex gap-4">
+            <div className="flex-1 space-y-2">
+              <Label>RPM 限制 <span className="text-xs text-muted-foreground">(0 = 不限)</span></Label>
+              <Input type="number" min={0} value={form.rpm_limit} onChange={(e) => patch({ rpm_limit: Number(e.target.value) })} placeholder="0" />
+            </div>
+            <div className="flex-1 space-y-2">
+              <Label>5h 配额 USD <span className="text-xs text-muted-foreground">(0 = 不限)</span></Label>
+              <Input
+                type="number"
+                min={0}
+                step={10}
+                value={form.window_5h_cost_cap_usd}
+                onChange={(e) => patch({ window_5h_cost_cap_usd: Number(e.target.value) })}
+                placeholder="250"
+              />
+              <p className="text-[10px] text-muted-foreground">官方 5h 窗口(对齐 resets_at)消费上限,按官方价格表累计。Max 20x 推荐 $250。需先拉过用量以获取重置时间,否则回退滚动 5h。</p>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -203,6 +217,18 @@ export function AccountFormDialog({
                     <Label className="text-xs">虚拟 git 用户名（留空自动派生）</Label>
                     <Input value={form.virtual_git_name} onChange={(e) => patch({ virtual_git_name: e.target.value })} placeholder="如 Alex Carter" />
                   </div>
+                </div>
+                <div className="space-y-1 pt-1">
+                  <Label className="text-xs">工作目录/路径</Label>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => patch({ path_mode: 'simulate' })} className={seg(form.path_mode === 'simulate', 'emerald')}>模拟（改写用户名）</button>
+                    <button type="button" onClick={() => patch({ path_mode: 'passthrough' })} className={seg(form.path_mode === 'passthrough', 'amber')}>透传（真实路径）</button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {form.path_mode === 'passthrough'
+                      ? '真实 cwd / home 路径原样发出（git名/平台/OS/device_id 仍归一化）。用于 Claude 需按真实工作目录做文件操作、否则路径串掉的场景。⚠ 会暴露真实用户名。'
+                      : '把路径里的真实用户名改写成虚拟用户名，隐私最高。但 Claude 看到的 cwd 是虚拟路径，可能影响其按绝对路径的文件操作。'}
+                  </p>
                 </div>
                 <div className="space-y-1 pt-1">
                   <Label className="text-xs">版本重新吸取周期（天，0=永久只吸一次）</Label>

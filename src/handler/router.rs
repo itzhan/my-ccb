@@ -172,6 +172,8 @@ async fn list_accounts(
         // 实时并发占用数 + 活跃会话数
         obj["current_concurrency"] = serde_json::json!(state.account_svc.get_slot_count(a.id).await);
         obj["current_sessions"] = serde_json::json!(state.account_svc.session_count(a.id).await);
+        // 5h 滑动窗口的累计消费(USD,按官方价格表计算)
+        obj["cost_5h_usd"] = serde_json::json!(state.account_svc.five_hour_cost(a.id).await);
         // 该账号当前呈现的虚拟身份（自定义优先，留空则派生）+ 机器指纹，供详情展示
         let (vuser, vgit) = a.effective_virtual_identity();
         let env: crate::model::account::CanonicalEnvData =
@@ -217,9 +219,11 @@ struct CreateAccountRequest {
     identity_mode: Option<String>,
     virtual_user: Option<String>,
     virtual_git_name: Option<String>,
+    path_mode: Option<String>,
     recapture_days: Option<i64>,
     max_sessions: Option<i32>,
     allowed_client_types: Option<String>,
+    window_5h_cost_cap_usd: Option<f64>,
 }
 
 async fn create_account(
@@ -271,10 +275,12 @@ async fn create_account(
         identity_mode: req.identity_mode.unwrap_or_default(),
         virtual_user: req.virtual_user.unwrap_or_default(),
         virtual_git_name: req.virtual_git_name.unwrap_or_default(),
+        path_mode: req.path_mode.unwrap_or_default(),
         identity_captured_at: None,
         recapture_days: req.recapture_days.unwrap_or(0),
         max_sessions: req.max_sessions.unwrap_or(3),
         allowed_client_types: req.allowed_client_types.unwrap_or_default(),
+        window_5h_cost_cap_usd: req.window_5h_cost_cap_usd.filter(|v| *v > 0.0),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -354,6 +360,9 @@ async fn update_account(
     if let Some(v) = updates.get("virtual_git_name").and_then(|v| v.as_str()) {
         existing.virtual_git_name = v.to_string();
     }
+    if let Some(v) = updates.get("path_mode").and_then(|v| v.as_str()) {
+        existing.path_mode = v.to_string();
+    }
     if let Some(v) = updates.get("recapture_days").and_then(|v| v.as_i64()) {
         existing.recapture_days = v.max(0);
     }
@@ -415,6 +424,15 @@ async fn update_account(
     if updates.get("rpm_limit").is_some() {
         let val = updates.get("rpm_limit").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         existing.rpm_limit = if val > 0 { Some(val) } else { None };
+    }
+    if updates.get("window_5h_cost_cap_usd").is_some() {
+        let val = updates
+            .get("window_5h_cost_cap_usd")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        existing.window_5h_cost_cap_usd = if val > 0.0 { Some(val) } else { None };
+        // 改了上限立刻让缓存失效,前端能立刻反映新状态
+        crate::service::account::invalidate_cost_cache(id);
     }
 
     state.account_svc.update_account(&existing).await?;

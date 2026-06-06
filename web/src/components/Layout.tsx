@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useState, type ComponentType } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { LogOut, Users, CircleCheck, TriangleAlert, CirclePause, KeyRound } from 'lucide-react';
 import { api, type Dashboard } from '@/api';
 import { useAuth } from '@/auth';
@@ -36,6 +36,7 @@ const STATS = (d: Dashboard): Stat[] => [
 export function Layout() {
   const { logout } = useAuth();
   const [dash, setDash] = useState<Dashboard | null>(null);
+  const showOverview = useLocation().pathname === '/'; // 概览只在账号页显示
 
   const load = useCallback(() => {
     api.getDashboard().then(setDash).catch(() => {});
@@ -86,8 +87,8 @@ export function Layout() {
         </header>
 
         <main className="mx-auto max-w-7xl space-y-8 px-6 py-8">
-          {/* 概览统计 */}
-          {dash && (
+          {/* 概览统计(仅账号页) */}
+          {showOverview && dash && (
             <section className="space-y-3">
               <h2 className="text-sm font-medium text-neutral-500">概览</h2>
               <div className="grid grid-cols-2 gap-4 md:grid-cols-5">

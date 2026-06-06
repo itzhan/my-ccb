@@ -128,6 +128,8 @@ pub struct GatewayService {
     client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
     /// 多人共号身份归一化的全局默认（账号未单独设置时回退）。
     identity_normalize: bool,
+    /// normalize 模式下路径透传的全局默认（账号 path_mode 留空时回退）。
+    path_passthrough: bool,
     /// 全局默认每分钟请求数上限（账号未单独设置 rpm_limit 时回退；<=0 不限）。
     default_rpm_limit: i64,
     /// 用量记录器（异步落库，满即丢）。
@@ -141,6 +143,7 @@ impl GatewayService {
         telemetry_svc: Arc<TelemetryService>,
         client_restriction: Arc<std::sync::RwLock<ClientRestriction>>,
         identity_normalize: bool,
+        path_passthrough: bool,
         default_rpm_limit: i64,
         usage_recorder: UsageRecorder,
     ) -> Self {
@@ -150,6 +153,7 @@ impl GatewayService {
             telemetry_svc,
             client_restriction,
             identity_normalize,
+            path_passthrough,
             default_rpm_limit,
             usage_recorder,
         }
@@ -413,7 +417,10 @@ impl GatewayService {
                     // 让一个号始终像同一个人。其余仍尽量保真。
                     let mut bm: serde_json::Value =
                         serde_json::from_slice(&body_bytes).unwrap_or(serde_json::json!({}));
-                    self.rewriter.normalize_cc_identity(&mut bm, &account);
+                    let path_passthrough =
+                        account.effective_path_passthrough(self.path_passthrough);
+                    self.rewriter
+                        .normalize_cc_identity(&mut bm, &account, path_passthrough);
                     // 漏点A:版本坐标始终从本请求自身提取,让 header 版本 == body 版本(消除不一致)
                     let pkg = headers
                         .get("x-stainless-package-version")

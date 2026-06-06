@@ -20,9 +20,11 @@ export interface FormState {
   identity_mode: string;
   virtual_user: string;
   virtual_git_name: string;
+  path_mode: string;
   recapture_days: number;
   max_sessions: number;
   allowed_client_types: string[];
+  window_5h_cost_cap_usd: number;
 }
 
 export const clientTypeOptions = [
@@ -46,10 +48,12 @@ export function emptyForm(): FormState {
     name: '', email: '', auth_type: 'setup_token',
     setup_token: '', access_token: '', refresh_token: '', expires_at: '',
     proxy_url: '', billing_mode: 'strip',
-    account_uuid: '', organization_uuid: '', subscription_type: '',
-    concurrency: 3, priority: 50, auto_telemetry: false, rpm_limit: 0,
-    identity_mode: 'passthrough', virtual_user: '', virtual_git_name: '',
-    recapture_days: 0, max_sessions: 3, allowed_client_types: [],
+    account_uuid: '', organization_uuid: '', subscription_type: 'max',
+    concurrency: 10, priority: 50, auto_telemetry: false, rpm_limit: 40,
+    identity_mode: 'normalize', virtual_user: '', virtual_git_name: '',
+    path_mode: 'simulate',
+    recapture_days: 0, max_sessions: 6, allowed_client_types: [],
+    window_5h_cost_cap_usd: 250,
   };
 }
 
@@ -72,8 +76,10 @@ export function formFromAccount(a: Account): FormState {
     identity_mode: a.identity_mode || 'passthrough',
     virtual_user: a.virtual_user || '',
     virtual_git_name: a.virtual_git_name || '',
+    path_mode: a.path_mode || 'simulate',
     recapture_days: a.recapture_days ?? 0,
     max_sessions: a.max_sessions ?? 3,
     allowed_client_types: (a.allowed_client_types || '').split(',').map((s) => s.trim()).filter(Boolean),
+    window_5h_cost_cap_usd: a.window_5h_cost_cap_usd ?? 0,
   };
 }

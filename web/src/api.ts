@@ -62,11 +62,14 @@ export interface Account {
   max_sessions?: number
   current_sessions?: number
   allowed_client_types?: string
+  window_5h_cost_cap_usd?: number | null
+  cost_5h_usd?: number
   usage_data?: UsageData
   usage_fetched_at?: string
   identity_mode?: string
   virtual_user?: string
   virtual_git_name?: string
+  path_mode?: string
   recapture_days?: number
   identity_captured_at?: string | null
   effective_identity?: {

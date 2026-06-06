@@ -533,7 +533,16 @@ impl Rewriter {
     /// 多人共号身份归一化：把"是谁/哪台机器"统一成账号的固定虚拟身份，
     /// 让一个号始终像同一个人在用。只改身份字段（home 用户名 / git / 平台 / OS / device_id），
     /// 不动项目子路径和对话内容（真人本就会在多个项目里干活）。
-    pub fn normalize_cc_identity(&self, body: &mut serde_json::Value, account: &Account) {
+    ///
+    /// `path_passthrough`=true 时跳过全部路径类改写（home用户名/cwd/memory slug/Windows 路径），
+    /// 真实绝对路径原样透传（git名/平台/OS/device_id 仍归一化），用于 Claude 需按真实 cwd
+    /// 做文件操作、否则路径串掉的场景。
+    pub fn normalize_cc_identity(
+        &self,
+        body: &mut serde_json::Value,
+        account: &Account,
+        path_passthrough: bool,
+    ) {
         let pe = self.parse_prompt_env(account);
         let (vuser, vgit) = account.effective_virtual_identity();
 
@@ -567,57 +576,65 @@ impl Rewriter {
         let anchor_repl = format!("{}/.claude/", home_plain);
 
         let scrub = |text: &str| -> String {
-            // Windows 整条路径 C:\Users\bob\dev\app → /Users/vuser/dev/app
-            //（去盘符、反斜杠转正斜杠、首段用户名替换为虚拟用户名）
-            let mut t = HOME_WIN_FULL_REGEX
-                .replace_all(text, |caps: &regex::Captures| {
-                    let rest = &caps[1]; // bob\dev\app
-                    let mut segs = rest.split('\\');
-                    segs.next(); // 丢弃原用户名段
-                    let sub: Vec<&str> = segs.filter(|s| !s.is_empty()).collect();
-                    if sub.is_empty() {
-                        home_plain.clone()
-                    } else {
-                        format!("{}/{}", home_plain, sub.join("/"))
-                    }
-                })
-                .to_string();
-            // Windows memory slug C--Users-bob → -Users-vuser（去盘符）
-            t = WIN_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
-            // Unix home 明文 + slug
-            t = HOME_PLAIN_REGEX.replace_all(&t, home_plain.as_str()).to_string();
-            t = HOME_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
+            let mut t = text.to_string();
+            // 路径类改写（home用户名 / cwd / memory slug / Windows 路径）：
+            // path_passthrough 时整体跳过，让真实绝对路径原样透传，保证 Claude 按真实 cwd 的文件操作不串。
+            if !path_passthrough {
+                // Windows 整条路径 C:\Users\bob\dev\app → /Users/vuser/dev/app
+                //（去盘符、反斜杠转正斜杠、首段用户名替换为虚拟用户名）
+                t = HOME_WIN_FULL_REGEX
+                    .replace_all(&t, |caps: &regex::Captures| {
+                        let rest = &caps[1]; // bob\dev\app
+                        let mut segs = rest.split('\\');
+                        segs.next(); // 丢弃原用户名段
+                        let sub: Vec<&str> = segs.filter(|s| !s.is_empty()).collect();
+                        if sub.is_empty() {
+                            home_plain.clone()
+                        } else {
+                            format!("{}/{}", home_plain, sub.join("/"))
+                        }
+                    })
+                    .to_string();
+                // Windows memory slug C--Users-bob → -Users-vuser（去盘符）
+                t = WIN_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
+                // Unix home 明文 + slug
+                t = HOME_PLAIN_REGEX.replace_all(&t, home_plain.as_str()).to_string();
+                t = HOME_SLUG_REGEX.replace_all(&t, home_slug.as_str()).to_string();
+            }
+            // 身份文本（git 名 / 平台 / shell / OS）：始终归一化。
             t = GIT_USER_REGEX.replace_all(&t, git_repl.as_str()).to_string();
             t = PLATFORM_REGEX.replace_all(&t, plat_repl.as_str()).to_string();
             t = SHELL_REGEX.replace_all(&t, shell_repl.as_str()).to_string();
             t = OS_VERSION_REGEX.replace_all(&t, os_repl.as_str()).to_string();
 
-            // 兜底①：任意非标准 HOME（以 /.claude/ 为锚）一律归一到虚拟 home
-            t = HOME_ANCHOR_REGEX
-                .replace_all(&t, anchor_repl.as_str())
-                .to_string();
-            // 兜底②：工作目录若不在虚拟 home 下（未捕捉到），固定到会话虚拟项目
-            t = WORKING_DIR_REGEX
-                .replace_all(&t, |caps: &regex::Captures| {
-                    let prefix = &caps[1];
-                    let path = &caps[0][prefix.len()..];
-                    if path.starts_with(home_plain.as_str()) {
-                        caps[0].to_string()
-                    } else {
-                        format!("{}{}", prefix, vproj_dir)
-                    }
-                })
-                .to_string();
-            // 兜底③：memory 项目 slug 若未归一化，固定到会话虚拟项目 slug
-            t = PROJECTS_SLUG_REGEX
-                .replace_all(&t, |caps: &regex::Captures| {
-                    if caps[2].starts_with(home_slug.as_str()) {
-                        caps[0].to_string()
-                    } else {
-                        format!("{}{}{}", &caps[1], vproj_slug, &caps[3])
-                    }
-                })
-                .to_string();
+            if !path_passthrough {
+                // 兜底①：任意非标准 HOME（以 /.claude/ 为锚）一律归一到虚拟 home
+                t = HOME_ANCHOR_REGEX
+                    .replace_all(&t, anchor_repl.as_str())
+                    .to_string();
+                // 兜底②：工作目录若不在虚拟 home 下（未捕捉到），固定到会话虚拟项目
+                t = WORKING_DIR_REGEX
+                    .replace_all(&t, |caps: &regex::Captures| {
+                        let prefix = &caps[1];
+                        let path = &caps[0][prefix.len()..];
+                        if path.starts_with(home_plain.as_str()) {
+                            caps[0].to_string()
+                        } else {
+                            format!("{}{}", prefix, vproj_dir)
+                        }
+                    })
+                    .to_string();
+                // 兜底③：memory 项目 slug 若未归一化，固定到会话虚拟项目 slug
+                t = PROJECTS_SLUG_REGEX
+                    .replace_all(&t, |caps: &regex::Captures| {
+                        if caps[2].starts_with(home_slug.as_str()) {
+                            caps[0].to_string()
+                        } else {
+                            format!("{}{}{}", &caps[1], vproj_slug, &caps[3])
+                        }
+                    })
+                    .to_string();
+            }
             t
         };
 
@@ -680,8 +697,9 @@ impl Rewriter {
     pub fn isolate_billing_block(&self, body: &mut serde_json::Value) {
         let arr = match body.get_mut("system").and_then(|s| s.as_array_mut()) {
             Some(a) => a,
-            None => return,
+            None => return, // system 为 string 或缺失:不处理(reattest 仍按原逻辑兜底)
         };
+        // 定位含 billing header 的块
         let mut hit: Option<usize> = None;
         for (i, blk) in arr.iter().enumerate() {
             if let Some(t) = blk.get("text").and_then(|x| x.as_str()) {
@@ -693,8 +711,9 @@ impl Rewriter {
         }
         let idx = match hit {
             Some(i) => i,
-            None => return,
+            None => return, // 没有 billing 行:无需处理
         };
+
         let text = arr[idx]
             .get("text")
             .and_then(|x| x.as_str())
@@ -702,18 +721,27 @@ impl Rewriter {
             .to_string();
         let billing_line = match BILLING_LINE_REGEX.find(&text) {
             Some(m) => m.as_str().trim_end_matches('\n').to_string(),
-            None => return,
+            None => return, // 匹配不到完整行:保守不动
         };
         let remainder = BILLING_LINE_REGEX.replace(&text, "").to_string();
         let has_cc = arr[idx].get("cache_control").is_some();
+
+        // 已是理想状态:独立(去掉 billing 后为空)、不带 cache_control、且在最前 → 不动
         if remainder.trim().is_empty() && !has_cc && idx == 0 {
             return;
         }
+
         if remainder.trim().is_empty() {
+            // 原块只有 billing:整块移除(下面在最前重建一个干净的独立块)
             arr.remove(idx);
-        } else if let Some(o) = arr[idx].as_object_mut() {
-            o.insert("text".into(), serde_json::Value::String(remainder));
+        } else {
+            // 原块还有其他内容(billing 混入):去掉 billing 行,保留该块及其 cache_control
+            if let Some(o) = arr[idx].as_object_mut() {
+                o.insert("text".into(), serde_json::Value::String(remainder));
+            }
         }
+
+        // 在最前插入独立 billing block(不带 cache_control)
         arr.insert(
             0,
             serde_json::json!({ "type": "text", "text": billing_line }),

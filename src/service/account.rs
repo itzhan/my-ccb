@@ -1,8 +1,10 @@
 use chrono::Utc;
+use once_cell::sync::Lazy;
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -23,6 +25,40 @@ const SESSION_WAIT_ATTEMPTS: usize = 40;
 const OAUTH_LOCK_TTL: Duration = Duration::from_secs(30);
 const OAUTH_WAIT_RETRY: Duration = Duration::from_millis(500);
 const OAUTH_WAIT_ATTEMPTS: usize = 20;
+
+/// 账号 5h 消费的内存缓存 TTL —— 避免每次选号都查 DB。
+const COST_CACHE_TTL: Duration = Duration::from_secs(60);
+/// 5h 配额接近 cap 多少比例时降级为兜底(优先选其他号)。
+const COST_SOFT_LIMIT_RATIO: f64 = 0.85;
+
+/// 账号 5h 消费缓存:account_id -> (cost_usd, computed_at)。
+static COST_CACHE: Lazy<Mutex<HashMap<i64, (f64, Instant)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// 写入/刷新缓存。
+fn cost_cache_put(account_id: i64, cost: f64) {
+    if let Ok(mut map) = COST_CACHE.lock() {
+        map.insert(account_id, (cost, Instant::now()));
+    }
+}
+
+/// 命中且未过期则返回 Some(cost)。
+fn cost_cache_get(account_id: i64) -> Option<f64> {
+    let map = COST_CACHE.lock().ok()?;
+    let (cost, at) = map.get(&account_id)?;
+    if at.elapsed() < COST_CACHE_TTL {
+        Some(*cost)
+    } else {
+        None
+    }
+}
+
+/// 强制失效(刚记完一笔账时调用,让下次查询拿到新值)。
+pub fn invalidate_cost_cache(account_id: i64) {
+    if let Ok(mut map) = COST_CACHE.lock() {
+        map.remove(&account_id);
+    }
+}
 
 /// 用量利用率达到此阈值即视为”撞墙”。
 const USAGE_HIT_THRESHOLD: f64 = 97.0;
@@ -115,20 +151,31 @@ impl AccountService {
         exclude_ids: &[i64],
         allowed_ids: &[i64],
     ) -> Result<Account, AppError> {
-        // 检查粘性会话
+        // 检查粘性会话:粘性号若已 5h 耗尽,允许跳过去找新号。
         if !session_hash.is_empty() {
             if let Ok(Some(account_id)) = self.cache.get_session_account_id(session_hash).await {
                 if account_id > 0 {
                     if let Ok(account) = self.store.get_by_id(account_id).await {
                         let id_allowed = allowed_ids.is_empty() || allowed_ids.contains(&account_id);
+                        let cost = self.five_hour_cost(account_id).await;
+                        let exhausted = Self::cost_exhausted(&account, cost);
                         if account.is_schedulable()
                             && !exclude_ids.contains(&account_id)
                             && id_allowed
+                            && !exhausted
                         {
                             return Ok(account);
                         }
+                        if exhausted {
+                            warn!(
+                                "account {} 5h cost ${:.2} >= cap ${:.2}, releasing sticky binding",
+                                account_id,
+                                cost,
+                                account.window_5h_cost_cap_usd.unwrap_or(0.0),
+                            );
+                        }
                     }
-                    // 过期绑定，删除
+                    // 过期绑定 / 已耗尽 → 删除
                     let _ = self.cache.delete_session(session_hash).await;
                 }
             }
@@ -137,20 +184,36 @@ impl AccountService {
         // 获取可调度账号
         let accounts = self.store.list_schedulable().await?;
 
-        // 过滤：排除项 + 可用账号限制
-        let candidates: Vec<Account> = accounts
-            .into_iter()
-            .filter(|a| {
-                !exclude_ids.contains(&a.id)
-                    && (allowed_ids.is_empty() || allowed_ids.contains(&a.id))
-            })
-            .collect();
-
-        if candidates.is_empty() {
-            return Err(AppError::ServiceUnavailable(
-                "no available accounts".into(),
-            ));
+        // 过滤:排除项 + 可用账号限制 + 5h 已耗尽的
+        let mut primary: Vec<Account> = Vec::new();
+        let mut fallback: Vec<Account> = Vec::new();
+        for a in accounts.into_iter() {
+            if exclude_ids.contains(&a.id) {
+                continue;
+            }
+            if !(allowed_ids.is_empty() || allowed_ids.contains(&a.id)) {
+                continue;
+            }
+            let cost = self.five_hour_cost(a.id).await;
+            if Self::cost_exhausted(&a, cost) {
+                continue; // 5h 配额已耗尽,本轮不可用
+            }
+            if Self::cost_soft_limited(&a, cost) {
+                fallback.push(a); // 接近上限,降级
+            } else {
+                primary.push(a);
+            }
         }
+
+        let candidates = if !primary.is_empty() {
+            primary
+        } else if !fallback.is_empty() {
+            fallback
+        } else {
+            return Err(AppError::ServiceUnavailable(
+                "no available accounts (all exhausted or rate-limited)".into(),
+            ));
+        };
 
         // 按优先级分组，同优先级内随机选择
         let selected = select_by_priority(&candidates);
@@ -191,6 +254,36 @@ impl AccountService {
         self.cache.session_count(account_id, SESSION_TTL).await
     }
 
+    /// 账号过去 5 小时累计消费(USD,内存缓存 60s)。
+    pub async fn five_hour_cost(&self, account_id: i64) -> f64 {
+        if let Some(c) = cost_cache_get(account_id) {
+            return c;
+        }
+        let cost = self
+            .store
+            .compute_5h_cost_usd(account_id)
+            .await
+            .unwrap_or(0.0);
+        cost_cache_put(account_id, cost);
+        cost
+    }
+
+    /// 5h 配额已耗尽 → 直接跳过此号。
+    pub fn cost_exhausted(account: &Account, cost_5h: f64) -> bool {
+        match account.window_5h_cost_cap_usd {
+            Some(cap) if cap > 0.0 => cost_5h >= cap,
+            _ => false,
+        }
+    }
+
+    /// 5h 配额接近上限(>=85%)→ 仅在没有更便宜的号时才用。
+    pub fn cost_soft_limited(account: &Account, cost_5h: f64) -> bool {
+        match account.window_5h_cost_cap_usd {
+            Some(cap) if cap > 0.0 => cost_5h >= cap * COST_SOFT_LIMIT_RATIO,
+            _ => false,
+        }
+    }
+
     /// 并发会话准入(满则排队等待)。返回 true=已为该会话占到/确认一个账号;false=超时仍满。
     /// 已粘性绑定的老会话始终放行;新会话只进有容量的号;全满则等待直到有名额或超时。
     pub async fn admit_session(
@@ -204,16 +297,19 @@ impl AccountService {
             return true; // 无 session id(如 count_tokens)不限制
         }
         for _ in 0..SESSION_WAIT_ATTEMPTS {
-            // 1) 已粘性绑定的老会话:始终放行(force),刷新活跃时间
+            // 1) 已粘性绑定的老会话:始终放行(force),刷新活跃时间;但 5h 耗尽除外
             if !session_hash.is_empty() {
                 if let Ok(Some(aid)) = self.cache.get_session_account_id(session_hash).await {
                     if aid > 0 {
                         if let Ok(acc) = self.store.get_by_id(aid).await {
                             let id_allowed =
                                 allowed_ids.is_empty() || allowed_ids.contains(&aid);
+                            let cost = self.five_hour_cost(aid).await;
+                            let exhausted = Self::cost_exhausted(&acc, cost);
                             if acc.is_schedulable()
                                 && !blocked_ids.contains(&aid)
                                 && id_allowed
+                                && !exhausted
                             {
                                 self.cache
                                     .session_admit(aid, session_id, acc.max_sessions, SESSION_TTL, true)
@@ -224,15 +320,28 @@ impl AccountService {
                     }
                 }
             }
-            // 2) 新会话:按优先级找一个有会话容量的号,占位 + 绑定粘性
+            // 2) 新会话:按优先级找一个有会话容量且 5h 未耗尽的号,占位 + 绑定粘性
             if let Ok(accounts) = self.store.list_schedulable().await {
-                let mut cands: Vec<Account> = accounts
-                    .into_iter()
-                    .filter(|a| {
-                        !blocked_ids.contains(&a.id)
-                            && (allowed_ids.is_empty() || allowed_ids.contains(&a.id))
-                    })
-                    .collect();
+                let mut primary: Vec<Account> = Vec::new();
+                let mut fallback: Vec<Account> = Vec::new();
+                for a in accounts.into_iter() {
+                    if blocked_ids.contains(&a.id) {
+                        continue;
+                    }
+                    if !(allowed_ids.is_empty() || allowed_ids.contains(&a.id)) {
+                        continue;
+                    }
+                    let cost = self.five_hour_cost(a.id).await;
+                    if Self::cost_exhausted(&a, cost) {
+                        continue;
+                    }
+                    if Self::cost_soft_limited(&a, cost) {
+                        fallback.push(a);
+                    } else {
+                        primary.push(a);
+                    }
+                }
+                let mut cands = if !primary.is_empty() { primary } else { fallback };
                 cands.sort_by(|a, b| b.priority.cmp(&a.priority));
                 for acc in &cands {
                     if self
