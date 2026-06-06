@@ -667,6 +667,59 @@ impl Rewriter {
         self.rewrite_metadata_user_id(body, account);
     }
 
+    /// 确保 `x-anthropic-billing-header:` 位于独立的、不带 cache_control 的 system block。
+    ///
+    /// 抓包实证(真实 Claude Code 2.1.156):billing 是 system[0] 独立块、不带 cache_control,
+    /// 缓存断点打在其后的 system 块上。实测把 billing 块的 cc_version 指纹 / cch 改掉(每次
+    /// 不同),后续带 cache_control 块的 cache_read 仍 100% 命中 —— 即 billing 块的变化
+    /// **不破坏** prompt 缓存。
+    ///
+    /// 因此只要保证 billing 行独占一个不带 cache_control 的块,reattest_cch / cch attestation
+    /// 怎么重算都不会破坏缓存。若客户端把 billing 行混进了带 cache_control 的块(老版本 /
+    /// 异常结构),这里把它剥离成独立块,消除缓存被每轮 cch 变化击穿的根因。
+    pub fn isolate_billing_block(&self, body: &mut serde_json::Value) {
+        let arr = match body.get_mut("system").and_then(|s| s.as_array_mut()) {
+            Some(a) => a,
+            None => return,
+        };
+        let mut hit: Option<usize> = None;
+        for (i, blk) in arr.iter().enumerate() {
+            if let Some(t) = blk.get("text").and_then(|x| x.as_str()) {
+                if t.contains("x-anthropic-billing-header") {
+                    hit = Some(i);
+                    break;
+                }
+            }
+        }
+        let idx = match hit {
+            Some(i) => i,
+            None => return,
+        };
+        let text = arr[idx]
+            .get("text")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let billing_line = match BILLING_LINE_REGEX.find(&text) {
+            Some(m) => m.as_str().trim_end_matches('\n').to_string(),
+            None => return,
+        };
+        let remainder = BILLING_LINE_REGEX.replace(&text, "").to_string();
+        let has_cc = arr[idx].get("cache_control").is_some();
+        if remainder.trim().is_empty() && !has_cc && idx == 0 {
+            return;
+        }
+        if remainder.trim().is_empty() {
+            arr.remove(idx);
+        } else if let Some(o) = arr[idx].as_object_mut() {
+            o.insert("text".into(), serde_json::Value::String(remainder));
+        }
+        arr.insert(
+            0,
+            serde_json::json!({ "type": "text", "text": billing_line }),
+        );
+    }
+
     /// normalize 模式下重建 cch 一致性(漏点B):
     /// 归一化 scrub 改了 body 内容后,真 CC 系统提示里的 `cc_version=ver.<3hex>` 和
     /// `cch=<5hex>` 校验戳就失效了。这里用(归一化后首条用户消息 + 本请求版本)重算

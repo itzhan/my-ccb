@@ -437,6 +437,9 @@ impl GatewayService {
                             svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
                         });
                     }
+                    // 缓存修复:确保 billing 行独占一个不带 cache_control 的 system block,
+                    // 这样下面 reattest 的 cc_version 指纹/cch 每轮变化都不会击穿 prompt 缓存。
+                    self.rewriter.isolate_billing_block(&mut bm);
                     // 漏点B:按本请求版本重算 cc_version 哈希 + cch attestation,与归一化后 body 一致
                     self.rewriter.reattest_cch(&mut bm, &coords.cc_version);
                     let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
