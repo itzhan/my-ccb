@@ -437,13 +437,22 @@ impl GatewayService {
                             svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
                         });
                     }
-                    // 缓存修复:确保 billing 行独占一个不带 cache_control 的 system block,
-                    // 这样下面 reattest 的 cc_version 指纹/cch 每轮变化都不会击穿 prompt 缓存。
-                    self.rewriter.isolate_billing_block(&mut bm);
-                    // 漏点B:按本请求版本重算 cc_version 哈希 + cch attestation,与归一化后 body 一致
-                    self.rewriter.reattest_cch(&mut bm, &coords.cc_version);
-                    let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
-                    let fb = crate::service::rewriter::compute_cch_attestation(fb);
+                    // billing 重写仅当 billing_mode == Rewrite 时执行。
+                    // - Strip 等其它模式:用户明确选择「不重写 billing」,跳过 cch 重算,
+                    //   避免每轮 cch 变化击穿 Anthropic prompt 缓存(cache_read 钉死、
+                    //   cache_creation 持续增长)。normalize_cc_identity 已经处理过
+                    //   身份字段(路径/git/平台/OS),与 billing 重写正交。
+                    // - Rewrite 模式:仍走 isolate_billing_block + reattest_cch + cch
+                    //   attestation 三步,是有意识的反风控选择,使用方接受对缓存的影响。
+                    let fb = if account.billing_mode == crate::model::account::BillingMode::Rewrite {
+                        self.rewriter.isolate_billing_block(&mut bm);
+                        // 漏点B:按本请求版本重算 cc_version 哈希 + cch attestation,与归一化后 body 一致
+                        self.rewriter.reattest_cch(&mut bm, &coords.cc_version);
+                        let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
+                        crate::service::rewriter::compute_cch_attestation(fb)
+                    } else {
+                        serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec())
+                    };
                     let mut h = passthrough_headers_ordered(&ordered_headers);
                     self.rewriter.normalize_os_headers_ordered(
                         &mut h,
