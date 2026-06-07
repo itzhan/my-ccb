@@ -18,7 +18,7 @@ use crate::store::cache::CacheStore;
 const STICKY_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OAUTH_REFRESH_BUFFER_SECONDS: i64 = 5 * 60;
 /// 会话空闲多久视为结束、自动腾出并发会话名额。
-const SESSION_TTL: Duration = Duration::from_secs(180);
+const SESSION_TTL: Duration = Duration::from_secs(60);
 /// 所有号都满时,新会话排队的重试间隔与最大次数(约 20s)。
 const SESSION_WAIT_RETRY: Duration = Duration::from_millis(500);
 const SESSION_WAIT_ATTEMPTS: usize = 40;
