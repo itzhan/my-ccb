@@ -41,6 +41,13 @@ async fn main() {
         service::client_guard::ClientRestriction::from_env(&cr_init),
     ));
 
+    // thinking 块 400 自动整流重试（全局开关，默认关）：优先 DB 设置
+    let tr_init = store::db::get_setting(&pool, "thinking_repair")
+        .await
+        .map(|v| v == "on")
+        .unwrap_or(false);
+    let thinking_repair = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(tr_init));
+
     // 缓存：优先 Redis，回退内存
     let cache: Arc<dyn store::cache::CacheStore> = match &cfg.redis {
         Some(redis_cfg) => {
@@ -101,6 +108,7 @@ async fn main() {
         cfg.path_mode == "passthrough",
         default_rpm_limit,
         usage_recorder.clone(),
+        thinking_repair.clone(),
     ));
     let token_tester = Arc::new(service::oauth::TokenTester::new());
     let oauth_flow_svc = Arc::new(service::oauth_flow::OAuthFlowService::new());
@@ -124,6 +132,7 @@ async fn main() {
         oauth_flow_svc,
         telemetry_svc,
         client_restriction,
+        thinking_repair,
         pool.clone(),
     );
 

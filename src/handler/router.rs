@@ -32,6 +32,8 @@ pub struct AppState {
     pub admin_password: String,
     /// 运行时可改的客户端限制级别（与网关共享）。
     pub client_restriction: Arc<std::sync::RwLock<crate::service::client_guard::ClientRestriction>>,
+    /// thinking 块 400 自动整流重试开关（与网关共享）。
+    pub thinking_repair: Arc<std::sync::atomic::AtomicBool>,
     /// 数据库连接池（设置持久化用）。
     pub pool: sqlx::AnyPool,
 }
@@ -45,6 +47,7 @@ pub fn build_router(
     oauth_flow_svc: Arc<OAuthFlowService>,
     telemetry_svc: Arc<TelemetryService>,
     client_restriction: Arc<std::sync::RwLock<crate::service::client_guard::ClientRestriction>>,
+    thinking_repair: Arc<std::sync::atomic::AtomicBool>,
     pool: sqlx::AnyPool,
 ) -> Router {
     let state = AppState {
@@ -56,6 +59,7 @@ pub fn build_router(
         telemetry_svc,
         admin_password: cfg.admin.password.clone(),
         client_restriction,
+        thinking_repair,
         pool,
     };
 
@@ -631,7 +635,15 @@ async fn get_settings(State(state): State<AppState>) -> Json<serde_json::Value> 
         .read()
         .map(|g| g.as_str())
         .unwrap_or("off");
-    Json(serde_json::json!({ "client_restriction": cr }))
+    let tr = if state
+        .thinking_repair
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        "on"
+    } else {
+        "off"
+    };
+    Json(serde_json::json!({ "client_restriction": cr, "thinking_repair": tr }))
 }
 
 async fn update_settings(
@@ -647,12 +659,29 @@ async fn update_settings(
             *g = parsed;
         }
     }
+    if let Some(v) = updates.get("thinking_repair").and_then(|v| v.as_str()) {
+        let on = v == "on";
+        crate::store::db::set_setting(&state.pool, "thinking_repair", if on { "on" } else { "off" })
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        state
+            .thinking_repair
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
     let cr = state
         .client_restriction
         .read()
         .map(|g| g.as_str())
         .unwrap_or("off");
-    Ok(Json(serde_json::json!({ "client_restriction": cr })))
+    let tr = if state
+        .thinking_repair
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        "on"
+    } else {
+        "off"
+    };
+    Ok(Json(serde_json::json!({ "client_restriction": cr, "thinking_repair": tr })))
 }
 
 // --- Usage Logs Handlers ---

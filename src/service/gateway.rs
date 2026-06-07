@@ -134,6 +134,8 @@ pub struct GatewayService {
     default_rpm_limit: i64,
     /// 用量记录器（异步落库，满即丢）。
     usage_recorder: UsageRecorder,
+    /// thinking 块 400 自动整流重试开关（设置页可切换）。
+    thinking_repair: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl GatewayService {
@@ -146,6 +148,7 @@ impl GatewayService {
         path_passthrough: bool,
         default_rpm_limit: i64,
         usage_recorder: UsageRecorder,
+        thinking_repair: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
             account_svc,
@@ -156,6 +159,7 @@ impl GatewayService {
             path_passthrough,
             default_rpm_limit,
             usage_recorder,
+            thinking_repair,
         }
     }
 
@@ -667,47 +671,100 @@ impl GatewayService {
 
         debug!("egress URL: {} (sidecar={})", request_url, use_sidecar);
 
-        let mut req_builder = match method {
-            "GET" => client.get(&request_url),
-            "POST" => client.post(&request_url),
-            "PUT" => client.put(&request_url),
-            "DELETE" => client.delete(&request_url),
-            "PATCH" => client.patch(&request_url),
-            _ => client.post(&request_url),
+        // 首次发送（请求构建+发送抽到 send_to_upstream，供整流重试复用）
+        let resp = send_to_upstream(
+            &client,
+            &request_url,
+            method,
+            headers,
+            &upstream_base,
+            &account.proxy_url,
+            use_sidecar,
+            body,
+        )
+        .await
+        .map_err(|e| {
+            warn!("upstream error for account {}: {}", account.id, e);
+            AppError::BadGateway("upstream request failed".into())
+        })?;
+
+        let mut status_code_u16 = resp.status().as_u16();
+        let mut upstream_headers = resp.headers().clone();
+
+        // thinking 块 400 自动整流重试（全局开关开 + 上游 400 + thinking/签名类错误）。
+        // 命中时要先读响应体（消费 resp），故统一用 UpstreamBody 承载"流式 resp / 已缓冲字节"两种来源。
+        let body_src: UpstreamBody = if status_code_u16 == 400
+            && self
+                .thinking_repair
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let err0 = resp.bytes().await.unwrap_or_default();
+            if crate::service::thinking_repair::is_thinking_signature_error(&err0) {
+                warn!(
+                    "account {}: 400 thinking-signature error, retrying with filtered thinking blocks",
+                    account.id
+                );
+                let b1 = crate::service::thinking_repair::filter_thinking_blocks_for_retry(body);
+                match send_to_upstream(
+                    &client, &request_url, method, headers, &upstream_base,
+                    &account.proxy_url, use_sidecar, &b1,
+                )
+                .await
+                {
+                    Ok(r1) if r1.status().as_u16() != 400 => {
+                        status_code_u16 = r1.status().as_u16();
+                        upstream_headers = r1.headers().clone();
+                        warn!("account {}: thinking retry succeeded ({})", account.id, status_code_u16);
+                        UpstreamBody::Stream(r1)
+                    }
+                    Ok(r1) => {
+                        // 一段后仍 400：tool 签名错则进二段（tool 块降级重发）
+                        let h1 = r1.headers().clone();
+                        let err1 = r1.bytes().await.unwrap_or_default();
+                        if crate::service::thinking_repair::looks_like_tool_signature_error(&err1) {
+                            warn!(
+                                "account {}: still 400 (tool signature), retrying with tool blocks downgraded",
+                                account.id
+                            );
+                            let b2 = crate::service::thinking_repair::filter_signature_sensitive_blocks_for_retry(body);
+                            match send_to_upstream(
+                                &client, &request_url, method, headers, &upstream_base,
+                                &account.proxy_url, use_sidecar, &b2,
+                            )
+                            .await
+                            {
+                                Ok(r2) => {
+                                    status_code_u16 = r2.status().as_u16();
+                                    upstream_headers = r2.headers().clone();
+                                    warn!("account {}: tool-downgrade retry done ({})", account.id, status_code_u16);
+                                    UpstreamBody::Stream(r2)
+                                }
+                                Err(e) => {
+                                    warn!("account {}: tool-downgrade retry send failed: {}", account.id, e);
+                                    upstream_headers = h1;
+                                    UpstreamBody::Buffered(err1)
+                                }
+                            }
+                        } else {
+                            upstream_headers = h1;
+                            UpstreamBody::Buffered(err1)
+                        }
+                    }
+                    Err(e) => {
+                        warn!("account {}: thinking retry send failed: {}", account.id, e);
+                        UpstreamBody::Buffered(err0) // 回原始 400
+                    }
+                }
+            } else {
+                UpstreamBody::Buffered(err0) // 非 thinking 400，原样回
+            }
+        } else {
+            UpstreamBody::Stream(resp)
         };
 
-        if use_sidecar {
-            // 边车模式：不逐个发头(到本地边车的这一跳顺序无意义且会被 Bun 重排)，
-            // 而是把【有序】请求头打包进 x-ccb-headers，由边车用 undici 按真 CC 顺序发出。
-            let payload = serde_json::to_string(headers).unwrap_or_else(|_| "[]".into());
-            let b64 = base64::engine::general_purpose::STANDARD.encode(payload);
-            req_builder = req_builder.header("x-ccb-upstream", &upstream_base);
-            req_builder = req_builder.header("x-ccb-proxy", &account.proxy_url);
-            req_builder = req_builder.header("x-ccb-headers", b64);
-        } else {
-            // craftls 直连：reqwest 按添加顺序发头，逐个按序加上
-            for (k, v) in headers {
-                req_builder = req_builder.header(k, v);
-            }
-            req_builder = req_builder.header("Host", "api.anthropic.com");
-        }
-        req_builder = req_builder.body(body.to_vec());
-
-        let resp = req_builder
-            .send()
-            .await
-            .map_err(|e| {
-                warn!("upstream error for account {}: {}", account.id, e);
-                AppError::BadGateway("upstream request failed".into())
-            })?;
-
-        let status_code_u16 = resp.status().as_u16();
         let status_code = StatusCode::from_u16(status_code_u16)
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         debug!("upstream response: {}", status_code_u16);
-
-        // clone 上游响应头（在消费 body stream 之前）
-        let upstream_headers = resp.headers().clone();
 
         // 处理认证失败：401/403 永久停用（封号特征：upstream 401 authentication_error /
         // 403 均为账号凭证失效，标记 Disabled 不再调度。若账号已处于 429 限流中则跳过，避免误判）
@@ -773,7 +830,11 @@ impl GatewayService {
         };
         let inner: std::pin::Pin<
             Box<dyn futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>,
-        > = Box::pin(resp.bytes_stream());
+        > = match body_src {
+            UpstreamBody::Stream(r) => Box::pin(r.bytes_stream()),
+            // 整流时已把响应体读入缓冲 → 用单块流回传，仍走 SniffStream 落库。
+            UpstreamBody::Buffered(b) => Box::pin(OnceBytes(Some(b))),
+        };
         let sniffed = SniffStream::new(inner, self.usage_recorder.clone(), meta);
         let axum_body = Body::from_stream(sniffed);
 
@@ -828,5 +889,60 @@ fn truncate_body(b: &[u8], max: usize) -> String {
         )
     } else {
         String::from_utf8_lossy(b).to_string()
+    }
+}
+
+/// 构建并发送一次上游请求（首发 + thinking 整流重试复用同一套头/方法/代理逻辑）。
+#[allow(clippy::too_many_arguments)]
+async fn send_to_upstream(
+    client: &reqwest::Client,
+    request_url: &str,
+    method: &str,
+    headers: &[(String, String)],
+    upstream_base: &str,
+    proxy_url: &str,
+    use_sidecar: bool,
+    body: &[u8],
+) -> reqwest::Result<reqwest::Response> {
+    let mut req_builder = match method {
+        "GET" => client.get(request_url),
+        "POST" => client.post(request_url),
+        "PUT" => client.put(request_url),
+        "DELETE" => client.delete(request_url),
+        "PATCH" => client.patch(request_url),
+        _ => client.post(request_url),
+    };
+    if use_sidecar {
+        // 边车：有序头打包进 x-ccb-headers，由边车 undici 按真 CC 顺序发出。
+        let payload = serde_json::to_string(headers).unwrap_or_else(|_| "[]".into());
+        let b64 = base64::engine::general_purpose::STANDARD.encode(payload);
+        req_builder = req_builder.header("x-ccb-upstream", upstream_base);
+        req_builder = req_builder.header("x-ccb-proxy", proxy_url);
+        req_builder = req_builder.header("x-ccb-headers", b64);
+    } else {
+        for (k, v) in headers {
+            req_builder = req_builder.header(k, v);
+        }
+        req_builder = req_builder.header("Host", "api.anthropic.com");
+    }
+    req_builder.body(body.to_vec()).send().await
+}
+
+/// 上游响应体来源：流式 resp（正常路径）或已读入缓冲的字节（thinking 整流时已消费 resp）。
+enum UpstreamBody {
+    Stream(reqwest::Response),
+    Buffered(bytes::Bytes),
+}
+
+/// 单块字节流：把已缓冲的响应体当作一次性 Stream 回传（整流后从缓冲构建响应，仍走 SniffStream 落库）。
+struct OnceBytes(Option<bytes::Bytes>);
+
+impl futures_core::Stream for OnceBytes {
+    type Item = reqwest::Result<bytes::Bytes>;
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.get_mut().0.take().map(Ok))
     }
 }

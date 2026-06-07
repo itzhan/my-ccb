@@ -186,9 +186,9 @@ export const api = {
   updateToken: (id: number, t: Partial<ApiToken>) => request<ApiToken>('PUT', `/admin/tokens/${id}`, t),
   deleteToken: (id: number) => request<void>('DELETE', `/admin/tokens/${id}`),
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),
-  getSettings: () => request<{ client_restriction: string }>('GET', '/admin/settings'),
-  updateSettings: (s: { client_restriction?: string }) =>
-    request<{ client_restriction: string }>('PUT', '/admin/settings', s),
+  getSettings: () => request<{ client_restriction: string; thinking_repair?: string }>('GET', '/admin/settings'),
+  updateSettings: (s: { client_restriction?: string; thinking_repair?: string }) =>
+    request<{ client_restriction: string; thinking_repair?: string }>('PUT', '/admin/settings', s),
 
   getUsageLogs: (params: { token_id?: number; account_id?: number; model?: string; result?: string; start?: string; end?: string; page?: number; page_size?: number } = {}) => {
     const qs = Object.entries(params)

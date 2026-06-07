@@ -6,5 +6,6 @@ pub mod oauth_flow;
 pub mod probe;
 pub mod rewriter;
 pub mod telemetry;
+pub mod thinking_repair;
 pub mod usage_poller;
 pub mod usage_recorder;

@@ -17,6 +17,7 @@ const OPTIONS: { value: Restriction; title: string; desc: string }[] = [
 export default function Settings() {
   const toast = useToast();
   const [value, setValue] = useState<Restriction>('off');
+  const [thinkingRepair, setThinkingRepair] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -25,6 +26,7 @@ export default function Settings() {
     try {
       const s = await api.getSettings();
       setValue((s.client_restriction as Restriction) || 'off');
+      setThinkingRepair(s.thinking_repair === 'on');
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
@@ -41,6 +43,19 @@ export default function Settings() {
       toast((e as Error).message || '保存失败');
     }
     setSaving(false);
+  }
+
+  // thinking 整流是布尔开关，点击即时保存。
+  async function toggleThinkingRepair() {
+    const next = !thinkingRepair;
+    setThinkingRepair(next);
+    try {
+      await api.updateSettings({ thinking_repair: next ? 'on' : 'off' });
+      toast('已保存，立即生效', 'success');
+    } catch (e) {
+      setThinkingRepair(!next);
+      toast((e as Error).message || '保存失败');
+    }
   }
 
   return (
@@ -86,6 +101,30 @@ export default function Settings() {
           <div className="flex items-center justify-between pt-2">
             <p className="text-xs text-neutral-400">⚠️ UA/header 可被伪造，这不是安全边界；真正的访问控制靠令牌。</p>
             <Button onClick={save} disabled={saving || loading}>{saving ? '保存中…' : '保存'}</Button>
+          </div>
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-base font-medium text-neutral-900">thinking 块 400 自动整流</h3>
+              <p className="mt-1 text-sm text-neutral-500">
+                开启后，上游因 thinking 块签名/结构非法返回 400（如 Invalid signature in thinking block）时，自动过滤/降级 thinking（必要时连同工具）块后同账号重发，避免请求直接失败。仅在出错时触发，正常请求不受影响。
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={thinkingRepair}
+              disabled={loading}
+              onClick={toggleThinkingRepair}
+              className={cn(
+                'relative h-6 w-11 shrink-0 rounded-full transition-colors',
+                thinkingRepair ? 'bg-indigo-500' : 'bg-neutral-300',
+              )}
+            >
+              <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all', thinkingRepair ? 'left-[22px]' : 'left-0.5')} />
+            </button>
           </div>
         </div>
       </div>
