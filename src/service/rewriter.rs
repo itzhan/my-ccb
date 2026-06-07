@@ -115,10 +115,13 @@ fn beta_header_for_model(model_id: &str) -> &'static str {
     // 注意：真实 CC 不发送 oauth-2025-04-20。
     let lower = model_id.to_lowercase();
     if lower.contains("haiku") {
-        // haiku 辅助请求用较小集合（不含 1M 上下文等重特性）
-        // cache-diagnosis-2026-04-07：与主集合同理 —— 新版 CC 的 diagnostics 字段按进程级
-        // 发送,haiku 辅助请求也可能带,normalize 覆盖后若缺此开关同样会被上游 400。
-        "claude-code-20250219,interleaved-thinking-2025-05-14,cache-diagnosis-2026-04-07"
+        // haiku 辅助请求用较小集合（不含 1M 上下文等重特性）。
+        // 但「字段门控类」beta 必须与主集合保持一致 —— 新版 CC 会按进程级在 body 里带
+        // diagnostics / context_management 等顶层字段,haiku 辅助请求也可能带;normalize 覆盖
+        // 客户端 anthropic-beta 后若缺对应开关,上游会 400「<field>: Extra inputs are not permitted」。
+        // context-management-2025-06-27：门控 body 顶层 context_management 字段。
+        // cache-diagnosis-2026-04-07：门控 body 顶层 diagnostics 字段。
+        "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,cache-diagnosis-2026-04-07"
     } else {
         // 去掉 context-1m-2025-08-07：1M 长上下文是计费功能,订阅号无额度会 429
         // "Usage credits are required for long context requests"。去掉后 CC 视窗口为 20 万,
