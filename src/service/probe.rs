@@ -35,7 +35,23 @@ pub fn detect_probe(headers: &HashMap<String, String>, body: &serde_json::Value)
         return Some(ProbeKind::Canned);
     }
 
-    // sub2api 两类探测都只含单条 user 消息：据此快速过滤真实多轮对话。
+    // 内容识别：数学挑战 → 回答案；账号测试 "hi" → 回文案。
+    if let Some(kind) = content_probe(body) {
+        return Some(kind);
+    }
+
+    // 占位 device_id：check-cx 等把 metadata.user_id 里的 device_id 设成全同字符
+    //（如 64 个 'a'）。真实客户端 device_id 是随机 64 位 hex,绝不会全同字符,故零误伤。
+    // 不依赖 prompt 内容,可兜住非数学题型的探针。
+    if has_synthetic_device_id(body) {
+        return Some(ProbeKind::Canned);
+    }
+
+    None
+}
+
+/// 按请求体内容识别 sub2api 两类探测(均只含单条 user 消息,据此快速过滤真实多轮对话)。
+fn content_probe(body: &serde_json::Value) -> Option<ProbeKind> {
     let messages = body.get("messages").and_then(|m| m.as_array())?;
     if messages.len() != 1 {
         return None;
@@ -67,6 +83,36 @@ pub fn detect_probe(headers: &HashMap<String, String>, body: &serde_json::Value)
     }
 
     None
+}
+
+/// metadata.user_id(JSON 字符串)里的 device_id 是否为全同字符占位符(探针特征)。
+fn has_synthetic_device_id(body: &serde_json::Value) -> bool {
+    let uid_str = match body
+        .get("metadata")
+        .and_then(|m| m.get("user_id"))
+        .and_then(|u| u.as_str())
+    {
+        Some(s) => s,
+        None => return false,
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(uid_str) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let device_id = parsed
+        .get("device_id")
+        .and_then(|d| d.as_str())
+        .unwrap_or("");
+    is_all_same_char(device_id)
+}
+
+/// 字符串是否「足够长且全是同一个字符」（如 64 个 'a'）。
+fn is_all_same_char(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) if s.len() >= 16 => chars.all(|c| c == first),
+        _ => false,
+    }
 }
 
 /// 探针响应：`healthy=false`（号池无可调度账号）统一回 503 错误体（让探活方判定不健康,
