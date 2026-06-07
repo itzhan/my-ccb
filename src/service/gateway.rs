@@ -466,13 +466,16 @@ impl GatewayService {
                     // - CLI 版本横跳的修复在 header 层(normalize_os_headers_ordered 用账号固定版本),
                     //   完全不碰 body/billing,故 Strip 下"header 版本固定"与"缓存正常"两者兼得。
                     // - Rewrite 模式才走 isolate + reattest(固定版本) + attestation(使用方已接受缓存影响)。
+                    let fixed_version = self.rewriter.account_version(&account);
                     let fb = if account.billing_mode == crate::model::account::BillingMode::Rewrite {
-                        let fixed_version = self.rewriter.account_version(&account);
                         self.rewriter.isolate_billing_block(&mut bm);
                         self.rewriter.reattest_cch(&mut bm, &fixed_version);
                         let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
                         crate::service::rewriter::compute_cch_attestation(fb)
                     } else {
+                        // Strip:原地把 cc_version 版本号同步成账号固定版本(不动 cch、不 isolate、
+                        // 不重构 → 不破缓存),让 body 版本也固定、与 header 一致、消除版本横跳。
+                        self.rewriter.sync_billing_version(&mut bm, &fixed_version);
                         serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec())
                     };
                     let mut h = passthrough_headers_ordered(&ordered_headers);

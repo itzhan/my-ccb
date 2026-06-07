@@ -798,6 +798,43 @@ impl Rewriter {
         }
     }
 
+    /// Strip 模式:【原地】把 body 里 billing 块的 cc_version 版本号同步成账号固定版本。
+    /// 只替换 `cc_version=X.Y.Z` 的版本号部分(保留客户端的 .{fp} 指纹后缀与 cch),
+    /// 不 isolate、不重构 system 结构、不重算 cch —— 因此【不破 prompt 缓存】
+    /// (缓存命中靠归一化后内容稳定;固定版本号也是稳定值,与 git/OS 归一同理)。
+    /// 与 sub2api syncBillingHeaderVersion 做法一致。version 为空则不动。
+    pub fn sync_billing_version(&self, body: &mut serde_json::Value, version: &str) {
+        if version.is_empty() {
+            return;
+        }
+        let repl = format!("cc_version={}", version);
+        let fix = |text: &str| -> String {
+            CC_VERSION_NUM_REGEX
+                .replace_all(text, repl.as_str())
+                .to_string()
+        };
+        match body.get_mut("system") {
+            Some(serde_json::Value::Array(arr)) => {
+                for item in arr.iter_mut() {
+                    if let Some(t) = item.get("text").and_then(|x| x.as_str()) {
+                        if t.contains("x-anthropic-billing-header") {
+                            let nt = fix(t);
+                            if let Some(o) = item.as_object_mut() {
+                                o.insert("text".into(), serde_json::Value::String(nt));
+                            }
+                        }
+                    }
+                }
+            }
+            Some(serde_json::Value::String(s)) => {
+                if s.contains("x-anthropic-billing-header") {
+                    *s = fix(s);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn rewrite_system_prompt(
         &self,
         body: &mut serde_json::Value,
@@ -1095,6 +1132,10 @@ static BILLING_REGEX: Lazy<Regex> =
 /// 仅匹配 cc_version 值部分，用于 Rewrite 模式保留 cc_entrypoint。
 static BILLING_VERSION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"cc_version=[\d.]+\.[a-f0-9]{3}").unwrap());
+/// 仅匹配 cc_version 的【版本号部分】(X.Y.Z),不含 .{fp} 后缀，用于 Strip 模式原地同步版本
+/// (只换版本号、保留客户端的指纹后缀与 cch、不重构结构 → 不破缓存)。与 sub2api syncBillingHeaderVersion 同正则。
+static CC_VERSION_NUM_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"cc_version=\d+\.\d+\.\d+").unwrap());
 static CCH_VALUE_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"cch=[a-f0-9]{5}").unwrap());
 static GIT_USER_REGEX: Lazy<Regex> =
