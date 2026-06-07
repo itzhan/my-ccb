@@ -207,6 +207,15 @@ impl GatewayService {
             .unwrap_or("")
             .to_string();
 
+        // 探针请求：带 X-Probe-Check 头的探活请求直接短路（不转发上游、不选号、不计费）。
+        // 按号池真实状态回复：有可调度号→200+健康文案；一个都没有→503。
+        if crate::service::probe::is_probe(&headers) {
+            let healthy = self.account_svc.has_schedulable_account().await;
+            return Ok(crate::service::probe::probe_response(
+                is_stream, &req_model, healthy,
+            ));
+        }
+
         // 客户端限制：非真实 Claude Code 客户端直接拒绝（运行时可改）
         let restriction = self
             .client_restriction
@@ -527,6 +536,30 @@ impl GatewayService {
                 )
                 .await?;
 
+            // 401/403：账号已在 forward_request 中被停用，换到下一个号重试。
+            // 会话粘性自动重绑：select_account 发现粘的号已不可调度 → 删旧绑定、选新号并粘到新号。
+            let upstream_u16 = upstream_status.as_u16();
+            if upstream_u16 == 401 || upstream_u16 == 403 {
+                if switch_count >= MAX_ACCOUNT_SWITCHES {
+                    warn!(
+                        "max account switches ({}) reached, returning last {}",
+                        MAX_ACCOUNT_SWITCHES, upstream_u16
+                    );
+                    return Ok(resp);
+                }
+                warn!(
+                    "account {} got {}, disabled and switching to next account",
+                    account.id, upstream_u16
+                );
+                exclude_ids.push(account.id);
+                switch_count += 1;
+                std::mem::forget(_guard);
+                self.account_svc.release_slot(account.id).await;
+                last_resp = Some(resp);
+                tokio::time::sleep(SWITCH_DELAY).await;
+                continue;
+            }
+
             // 非 429 直接返回（RPM 已在 admission 预占，无需此处递增）
             if upstream_status != StatusCode::TOO_MANY_REQUESTS {
                 return Ok(resp);
@@ -675,30 +708,37 @@ impl GatewayService {
         // clone 上游响应头（在消费 body stream 之前）
         let upstream_headers = resp.headers().clone();
 
-        // 处理认证失败：403 永久停用（但如果账号已处于 429 限流中则跳过，避免误判）
-        if status_code_u16 == 403 {
+        // 处理认证失败：401/403 永久停用（封号特征：upstream 401 authentication_error /
+        // 403 均为账号凭证失效，标记 Disabled 不再调度。若账号已处于 429 限流中则跳过，避免误判）
+        if status_code_u16 == 401 || status_code_u16 == 403 {
             let is_rate_limited = account
                 .rate_limit_reset_at
                 .map(|reset| Utc::now() < reset)
                 .unwrap_or(false);
             if is_rate_limited {
                 warn!(
-                    "account {} got 403 while rate-limited, skipping permanent disable",
-                    account.id
+                    "account {} got {} while rate-limited, skipping permanent disable",
+                    account.id, status_code_u16
                 );
             } else if let Err(e) = self
                 .account_svc
                 .disable_account(
                     account.id,
                     AccountStatus::Disabled,
-                    "403 认证失败",
+                    &format!("{} 认证失败", status_code_u16),
                     None,
                 )
                 .await
             {
-                warn!("failed to disable account {} for 403: {}", account.id, e);
+                warn!(
+                    "failed to disable account {} for {}: {}",
+                    account.id, status_code_u16, e
+                );
             } else {
-                warn!("account {} permanently disabled for 403", account.id);
+                warn!(
+                    "account {} permanently disabled for {}",
+                    account.id, status_code_u16
+                );
             }
         }
 

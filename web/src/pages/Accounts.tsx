@@ -236,6 +236,20 @@ export default function Accounts() {
     }
   }
 
+  // 重置：把账号(含被封禁/限流)清回正常可调用状态(status=active，清空停用原因与限流窗口)。
+  async function resetAccount(a: Account) {
+    try {
+      const res = await api.updateAccount(a.id, { status: 'active' });
+      setAllAccounts((prev) => prev.map((x) => x.id === a.id
+        ? { ...x, status: res.status, disable_reason: res.disable_reason ?? '', rate_limited_at: res.rate_limited_at, rate_limit_reset_at: res.rate_limit_reset_at }
+        : x));
+      refreshDashboard();
+      toast('已重置为正常状态');
+    } catch (e) {
+      toast((e as Error).message || '重置失败');
+    }
+  }
+
   function applyOAuth(f: FormState) { setEditing(null); setForm(f); setShowForm(true); }
 
   return (
@@ -395,6 +409,9 @@ export default function Accounts() {
                           className={cn('h-7 px-2 text-xs', dead ? 'text-emerald-600 hover:bg-emerald-50' : 'text-amber-600 hover:bg-amber-50')}>
                           {dead ? '启用' : '停用'}
                         </Button>
+                        {dead && (
+                          <Button variant="ghost" size="sm" onClick={() => resetAccount(a)} className="h-7 px-2 text-xs text-blue-600 hover:bg-blue-50">重置</Button>
+                        )}
                         <Button variant="ghost" size="sm" onClick={() => openEdit(a)} className="h-7 px-2 text-xs text-neutral-500">编辑</Button>
                         <Button variant="ghost" size="sm" onClick={() => refreshUsage(a.id)} disabled={refreshingUsage === a.id} className="h-7 px-2 text-xs text-indigo-600">{refreshingUsage === a.id ? '...' : '用量'}</Button>
                         <Button variant="ghost" size="sm" onClick={() => { setDeleteTargetId(a.id); setShowDelete(true); }} className="h-7 px-2 text-xs text-red-500 hover:bg-red-50">删除</Button>

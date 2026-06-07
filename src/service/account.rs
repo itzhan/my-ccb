@@ -137,6 +137,15 @@ impl AccountService {
         self.store.list().await
     }
 
+    /// 号池是否存在任意一个可调度账号（active + 未限流）。供探针健康判定用,只读无副作用。
+    pub async fn has_schedulable_account(&self) -> bool {
+        self.store
+            .list_schedulable()
+            .await
+            .map(|v| v.iter().any(|a| a.is_schedulable()))
+            .unwrap_or(false)
+    }
+
     pub async fn list_accounts_paged(&self, page: i64, page_size: i64) -> Result<(Vec<Account>, i64), AppError> {
         let total = self.store.count().await?;
         let accounts = self.store.list_paged(page, page_size).await?;
