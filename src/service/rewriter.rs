@@ -503,7 +503,9 @@ impl Rewriter {
     ) {
         let env = self.parse_env(account);
         let os = stainless_os_from_platform(&env.platform);
-        // 版本三项:优先本次吸取的 → 账号已存的 → 全局默认
+        // 版本三项:优先【账号吸取并存下的固定版本】→ 本次请求 → 全局默认。
+        // 这样同一个 normalize 号不管被哪个 CLI 版本的客户端打,上游永远只看到一个稳定版本,
+        // 消除"同一设备版本横跳"的多人共号封号信号。env.version 由首个请求 persist 吸取写入。
         let (cap_v, cap_p, cap_r) = match captured {
             Some(c) => (
                 c.cc_version.as_str(),
@@ -512,9 +514,9 @@ impl Rewriter {
             ),
             None => ("", "", ""),
         };
-        let version = pick3(cap_v, &env.version, DEFAULT_VERSION);
-        let package_version = pick3(cap_p, &env.package_version, STAINLESS_PACKAGE_VERSION);
-        let runtime_ver = pick3(cap_r, &env.node_version, DEFAULT_RUNTIME_VERSION);
+        let version = pick3(&env.version, cap_v, DEFAULT_VERSION);
+        let package_version = pick3(&env.package_version, cap_p, STAINLESS_PACKAGE_VERSION);
+        let runtime_ver = pick3(&env.node_version, cap_r, DEFAULT_RUNTIME_VERSION);
         let ua = format!("claude-cli/{} (external, cli)", version);
         // anthropic-beta 统一成"该模型"的标准集合(通用部分,不吸取)
         let beta = beta_header_for_model(model);
@@ -530,6 +532,17 @@ impl Rewriter {
                 "accept" => *v = "application/json".to_string(),
                 _ => {}
             }
+        }
+    }
+
+    /// 账号固定的 CLI 版本（吸取后存于 canonical_env.version；未吸取前为预设/默认）。
+    /// 供 normalize 时把 body 的 cc_version 也固定到与 header 同一版本，保证 header==body。
+    pub fn account_version(&self, account: &Account) -> String {
+        let v = self.parse_env(account).version;
+        if v.is_empty() {
+            DEFAULT_VERSION.to_string()
+        } else {
+            v
         }
     }
 
