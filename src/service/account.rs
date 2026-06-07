@@ -1,6 +1,6 @@
 use chrono::Utc;
 use once_cell::sync::Lazy;
-use rand::Rng;
+use rand::seq::SliceRandom;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -224,8 +224,11 @@ impl AccountService {
             ));
         };
 
-        // 按优先级分组，同优先级内随机选择
-        let selected = select_by_priority(&candidates);
+        // 按优先级 + 实时会话占用率排序，取最高优先级里最空的号
+        let ranked = self.rank_candidates(candidates).await;
+        let selected = ranked.into_iter().next().ok_or_else(|| {
+            AppError::ServiceUnavailable("no available accounts after ranking".into())
+        })?;
 
         // 绑定粘性会话
         if !session_hash.is_empty() {
@@ -236,6 +239,28 @@ impl AccountService {
         }
 
         Ok(selected)
+    }
+
+    /// 把候选账号按调度顺序排序(select_account / admit_session 共用,保证两条路径口径一致):
+    /// 1) 优先级数值小者优先(高优先级);
+    /// 2) 同优先级按会话占用率(活跃会话数 / max_sessions)升序 —— 选当前最空的号做负载均衡;
+    /// 3) 占用率相同随机打散,避免总落在同一个号上。
+    async fn rank_candidates(&self, candidates: Vec<Account>) -> Vec<Account> {
+        // 预取各号活跃会话数,算占用率。max_sessions<=0(不限)时退化为按绝对会话数比较。
+        let mut scored: Vec<(f64, Account)> = Vec::with_capacity(candidates.len());
+        for a in candidates {
+            let count = self.cache.session_count(a.id, SESSION_TTL).await;
+            let ratio = if a.max_sessions > 0 {
+                count as f64 / a.max_sessions as f64
+            } else {
+                count as f64
+            };
+            scored.push((ratio, a));
+        }
+        // 先随机打散,再做稳定排序 → 优先级/占用率并列的项保持随机顺序。
+        scored.shuffle(&mut rand::thread_rng());
+        scored.sort_by(|(ra, aa), (rb, ab)| aa.priority.cmp(&ab.priority).then(ra.total_cmp(rb)));
+        scored.into_iter().map(|(_, a)| a).collect()
     }
 
     /// 尝试获取账号的并发槽位。
@@ -350,9 +375,10 @@ impl AccountService {
                         primary.push(a);
                     }
                 }
-                let mut cands = if !primary.is_empty() { primary } else { fallback };
-                cands.sort_by(|a, b| b.priority.cmp(&a.priority));
-                for acc in &cands {
+                let cands = if !primary.is_empty() { primary } else { fallback };
+                // 与 select_account 统一:优先级数值小者优先,同优先级选会话最空的号。
+                let ranked = self.rank_candidates(cands).await;
+                for acc in &ranked {
                     if self
                         .cache
                         .session_admit(acc.id, session_id, acc.max_sessions, SESSION_TTL, false)
@@ -906,25 +932,6 @@ pub fn generate_session_hash(
     let raw = format!("{}|{}|{}", user_agent, content, hour_window);
     let hash = Sha256::digest(raw.as_bytes());
     hex::encode(&hash[..16])
-}
-
-fn select_by_priority(accounts: &[Account]) -> Account {
-    if accounts.len() == 1 {
-        return accounts[0].clone();
-    }
-
-    // 找到最高优先级（最小数值）
-    let best_priority = accounts.iter().map(|a| a.priority).min().unwrap_or(50);
-
-    // 收集相同优先级的所有账号
-    let best: Vec<&Account> = accounts
-        .iter()
-        .filter(|a| a.priority == best_priority)
-        .collect();
-
-    // 同优先级内随机选择
-    let idx = rand::thread_rng().gen_range(0..best.len());
-    best[idx].clone()
 }
 
 #[cfg(test)]
