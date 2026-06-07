@@ -207,12 +207,13 @@ impl GatewayService {
             .unwrap_or("")
             .to_string();
 
-        // 探针请求：带 X-Probe-Check 头的探活请求直接短路（不转发上游、不选号、不计费）。
-        // 按号池真实状态回复：有可调度号→200+健康文案；一个都没有→503。
-        if crate::service::probe::is_probe(&headers) {
+        // 探针请求：X-Probe-Check 头 / sub2api 探测(测号 "hi"、通道健康检查数学题)直接短路
+        //（不转发上游、不选号、不计费）。按号池真实状态回复：有可调度号→200(文案/挑战答案)；
+        // 一个都没有→503,让探活方判定本网关不健康、不再路由过来。
+        if let Some(kind) = crate::service::probe::detect_probe(&headers, &body_map) {
             let healthy = self.account_svc.has_schedulable_account().await;
             return Ok(crate::service::probe::probe_response(
-                is_stream, &req_model, healthy,
+                is_stream, &req_model, healthy, &kind,
             ));
         }
 
