@@ -458,16 +458,23 @@ impl GatewayService {
                             svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
                         });
                     }
-                    // 版本固定:无论 billing_mode,都把 body 的 billing 块 cc_version 归一到
-                    // 账号固定版本(与 header 的 env.version 同源),保证 header==body、消除版本横跳。
-                    // isolate_billing_block 让 billing 块独立(system[0]、缓存断点在其后),其
-                    // cc_version/cch 变化【不破 prompt 缓存】(该函数注释有抓包实证),故 Strip 模式
-                    // 也安全。reattest_cch 用固定版本重算 cc_version 哈希,compute_cch_attestation 补 cch。
-                    let fixed_version = self.rewriter.account_version(&account);
-                    self.rewriter.isolate_billing_block(&mut bm);
-                    self.rewriter.reattest_cch(&mut bm, &fixed_version);
-                    let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
-                    let fb = crate::service::rewriter::compute_cch_attestation(fb);
+                    // billing 块按 billing_mode 处理。
+                    // ⚠️ 关键(踩过坑):Strip 模式【绝不能】动 billing 块 ——
+                    //   isolate_billing_block 会重构 system[0]、reattest_cch/cch attestation 会每请求
+                    //   改其内容,导致缓存前缀每请求变化 → 击穿 Anthropic prompt 缓存
+                    //   (cache_read 不命中、cache_creation 反复增长)。Strip 必须原样透传客户端 billing。
+                    // - CLI 版本横跳的修复在 header 层(normalize_os_headers_ordered 用账号固定版本),
+                    //   完全不碰 body/billing,故 Strip 下"header 版本固定"与"缓存正常"两者兼得。
+                    // - Rewrite 模式才走 isolate + reattest(固定版本) + attestation(使用方已接受缓存影响)。
+                    let fb = if account.billing_mode == crate::model::account::BillingMode::Rewrite {
+                        let fixed_version = self.rewriter.account_version(&account);
+                        self.rewriter.isolate_billing_block(&mut bm);
+                        self.rewriter.reattest_cch(&mut bm, &fixed_version);
+                        let fb = serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec());
+                        crate::service::rewriter::compute_cch_attestation(fb)
+                    } else {
+                        serde_json::to_vec(&bm).unwrap_or_else(|_| body_bytes.to_vec())
+                    };
                     let mut h = passthrough_headers_ordered(&ordered_headers);
                     self.rewriter.normalize_os_headers_ordered(
                         &mut h,
