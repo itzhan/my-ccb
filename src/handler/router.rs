@@ -224,6 +224,7 @@ struct CreateAccountRequest {
     virtual_user: Option<String>,
     virtual_git_name: Option<String>,
     path_mode: Option<String>,
+    session_mode: Option<String>,
     recapture_days: Option<i64>,
     max_sessions: Option<i32>,
     allowed_client_types: Option<String>,
@@ -280,7 +281,10 @@ async fn create_account(
         virtual_user: req.virtual_user.unwrap_or_default(),
         virtual_git_name: req.virtual_git_name.unwrap_or_default(),
         path_mode: req.path_mode.unwrap_or_default(),
+        session_mode: req.session_mode.unwrap_or_default(),
         identity_captured_at: None,
+        captured_session_id: String::new(),
+        captured_session_at: None,
         recapture_days: req.recapture_days.unwrap_or(0),
         max_sessions: req.max_sessions.unwrap_or(3),
         allowed_client_types: req.allowed_client_types.unwrap_or_default(),
@@ -366,6 +370,9 @@ async fn update_account(
     }
     if let Some(v) = updates.get("path_mode").and_then(|v| v.as_str()) {
         existing.path_mode = v.to_string();
+    }
+    if let Some(v) = updates.get("session_mode").and_then(|v| v.as_str()) {
+        existing.session_mode = v.to_string();
     }
     if let Some(v) = updates.get("recapture_days").and_then(|v| v.as_i64()) {
         existing.recapture_days = v.max(0);

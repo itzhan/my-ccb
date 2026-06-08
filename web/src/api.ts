@@ -70,8 +70,11 @@ export interface Account {
   virtual_user?: string
   virtual_git_name?: string
   path_mode?: string
+  session_mode?: string
   recapture_days?: number
   identity_captured_at?: string | null
+  captured_session_id?: string
+  captured_session_at?: string | null
   effective_identity?: {
     device_id: string
     virtual_user: string

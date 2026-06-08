@@ -136,6 +136,10 @@ pub struct GatewayService {
     usage_recorder: UsageRecorder,
     /// thinking 块 400 自动整流重试开关（设置页可切换）。
     thinking_repair: Arc<std::sync::atomic::AtomicBool>,
+    /// normalize 模式下每账号「当前对上游呈现的 session_id」+ 吸取时刻。
+    /// 每 15-20 分钟从真实请求吸取轮换一次，把一台虚拟设备的并发会话坍缩成单个会话，
+    /// 消除「一设备多并发 session」的共号封号信号。in-process 易失，重启后首请求重新吸取。
+    session_rotator: Arc<std::sync::Mutex<std::collections::HashMap<i64, (String, std::time::Instant)>>>,
 }
 
 impl GatewayService {
@@ -160,7 +164,38 @@ impl GatewayService {
             default_rpm_limit,
             usage_recorder,
             thinking_repair,
+            session_rotator: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// 返回该账号当前应呈现给上游的 session_id（每 15-20 分钟从真实请求吸取轮换一次）。
+    /// 窗口内复用同一个值；到期/首次则吸取本请求的真实 session_id 作为新值，并异步落库供面板展示。
+    /// `incoming` 为空时返回空串（不处理）。窗口按账号取模错峰（各号不在同一时刻轮换）。
+    fn rotate_session_id(&self, account_id: i64, incoming: &str) -> String {
+        if incoming.is_empty() {
+            return String::new();
+        }
+        let window =
+            std::time::Duration::from_secs(900 + (account_id.unsigned_abs() % 6) * 60); // 15-20min
+        let (val, rotated) = {
+            let mut map = self.session_rotator.lock().unwrap();
+            match map.get(&account_id) {
+                Some((sid, at)) if at.elapsed() < window => (sid.clone(), false),
+                _ => {
+                    map.insert(account_id, (incoming.to_string(), std::time::Instant::now()));
+                    (incoming.to_string(), true)
+                }
+            }
+        };
+        if rotated {
+            // 轮换时把当前吸取的 session 异步写库（纯展示用，热路径不读库）。
+            let svc = self.account_svc.clone();
+            let sid = val.clone();
+            tokio::spawn(async move {
+                svc.persist_captured_session(account_id, &sid).await;
+            });
+        }
+        val
     }
 
     /// 核心网关逻辑 -- axum handler。
@@ -435,6 +470,20 @@ impl GatewayService {
                         account.effective_path_passthrough(self.path_passthrough);
                     self.rewriter
                         .normalize_cc_identity(&mut bm, &account, path_passthrough);
+                    // session_id 归一化:每 15-20min 从真实请求吸取轮换一次,把一台虚拟设备的并发
+                    // 会话坍缩成单会话(消除"一设备多并发 session"封号信号)。
+                    // ⚠️ 必须在 normalize_cc_identity 之后:那里已用【真实】session 派生 virtual_project
+                    //    (保证路径每对话稳定、不破缓存);这里才把上游遥测看到的 session_id 换成虚拟值。
+                    let virt_sid = if account.session_rotate_enabled() {
+                        let incoming = crate::service::rewriter::get_user_session_id(&bm);
+                        let v = self.rotate_session_id(account.id, &incoming);
+                        if !v.is_empty() {
+                            crate::service::rewriter::set_user_session_id(&mut bm, &v);
+                        }
+                        v
+                    } else {
+                        String::new() // 开关关闭:session_id 原样透传(当前行为),便于 A/B 对照封号
+                    };
                     // 漏点A:版本坐标始终从本请求自身提取,让 header 版本 == body 版本(消除不一致)
                     let pkg = headers
                         .get("x-stainless-package-version")
@@ -485,6 +534,20 @@ impl GatewayService {
                         &req_model,
                         Some(&coords),
                     );
+                    // header 的 X-Claude-Code-Session-Id 同步成与 body 相同的虚拟 session,
+                    // 否则上游看到 header 一堆 / body 一个,不一致反而更可疑。
+                    if !virt_sid.is_empty() {
+                        let mut found = false;
+                        for (k, v) in h.iter_mut() {
+                            if k.eq_ignore_ascii_case("x-claude-code-session-id") {
+                                *v = virt_sid.clone();
+                                found = true;
+                            }
+                        }
+                        if !found {
+                            h.push(("X-Claude-Code-Session-Id".into(), virt_sid.clone()));
+                        }
+                    }
                     (fb, h)
                 } else {
                     // 纯透传：真实 Claude Code 客户端的请求原样转发，一个字节不改，

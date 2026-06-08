@@ -231,6 +231,18 @@ export function AccountFormDialog({
                   </p>
                 </div>
                 <div className="space-y-1 pt-1">
+                  <Label className="text-xs">session_id 归一化轮换（A/B 测试封号）</Label>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => patch({ session_mode: 'rotate' })} className={seg(form.session_mode === 'rotate', 'emerald')}>开（每15-20min吸取轮换）</button>
+                    <button type="button" onClick={() => patch({ session_mode: 'off' })} className={seg(form.session_mode !== 'rotate', 'amber')}>关（原样透传）</button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {form.session_mode === 'rotate'
+                      ? '把并发会话坍缩成单个 session_id，每 15-20 分钟从真实请求吸取一个新的。上游看到「一设备+当前一个会话」，消除「一设备多并发会话」的共号信号。详情页可看到当前吸取的 sid。'
+                      : '默认：session_id 原样透传，上游会看到该设备同时挂多个并发会话。开启另一半账号做对照，验证是否此信号导致封号。'}
+                  </p>
+                </div>
+                <div className="space-y-1 pt-1">
                   <Label className="text-xs">版本重新吸取周期（天，0=永久只吸一次）</Label>
                   <Input type="number" min={0} value={form.recapture_days} onChange={(e) => patch({ recapture_days: Number(e.target.value) })} placeholder="0" />
                   <p className="text-[11px] text-muted-foreground">CC 版本/SDK 版本从该号第一个请求吸取并复用；周期到后由下一个请求重吸（模拟升级 CC）。device_id/系统等仍用预设。</p>

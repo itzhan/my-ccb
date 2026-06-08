@@ -161,6 +161,7 @@ export default function Accounts() {
         u.virtual_user = form.virtual_user;
         u.virtual_git_name = form.virtual_git_name;
         u.path_mode = form.path_mode;
+        u.session_mode = form.session_mode;
         u.recapture_days = Number(form.recapture_days) || 0;
         u.max_sessions = Math.max(0, Number(form.max_sessions) || 0);
         u.allowed_client_types = form.allowed_client_types.join(',');
@@ -179,6 +180,7 @@ export default function Accounts() {
           rpm_limit: form.rpm_limit || 0, identity_mode: form.identity_mode,
           virtual_user: form.virtual_user, virtual_git_name: form.virtual_git_name,
           path_mode: form.path_mode,
+          session_mode: form.session_mode,
           recapture_days: Number(form.recapture_days) || 0,
           max_sessions: Math.max(0, Number(form.max_sessions) || 0),
           allowed_client_types: form.allowed_client_types.join(','),
@@ -389,6 +391,11 @@ export default function Accounts() {
                             ? <span className="text-neutral-400"> v{String(a.canonical_env?.version ?? '')}</span>
                             : <span className="text-amber-600"> 待吸取</span>)}
                         </p>
+                        {a.identity_mode === 'normalize' && (
+                          <p className="truncate text-neutral-400" title={a.captured_session_id ? `当前上游 session（每15-20min吸取轮换）：${a.captured_session_id}${a.captured_session_at ? `\n吸取于 ${a.captured_session_at}` : ''}` : '尚未吸取（首个请求后出现）'}>
+                            sid {a.captured_session_id ? `${a.captured_session_id.slice(0, 8)}…` : '—'}
+                          </p>
+                        )}
                         <p className={a.auto_telemetry ? 'text-emerald-600' : 'text-neutral-500'}>
                           遥测{a.auto_telemetry ? '开' : '关'}{a.telemetry_count > 0 && <span className="text-neutral-400"> ·{a.telemetry_count}</span>}
                         </p>

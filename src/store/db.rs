@@ -130,6 +130,20 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
+    // normalize 模式下当前对上游呈现的 session_id(每 15-20min 吸取轮换)+ 吸取时间,展示用
+    sqlx::query("ALTER TABLE accounts ADD COLUMN captured_session_id TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE accounts ADD COLUMN captured_session_at TEXT")
+        .execute(pool)
+        .await
+        .ok();
+    // session_id 归一化轮换开关(账号级):''/off=关 / rotate=开
+    sqlx::query("ALTER TABLE accounts ADD COLUMN session_mode TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
 
     // api_tokens 表
     let token_schema = if driver == "sqlite" { SQLITE_TOKENS_SCHEMA } else { PG_TOKENS_SCHEMA };

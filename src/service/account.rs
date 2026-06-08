@@ -436,6 +436,13 @@ impl AccountService {
         }
     }
 
+    /// 持久化当前对上游呈现的 session_id（每 15-20min 轮换吸取时调用）。纯展示用，失败仅告警。
+    pub async fn persist_captured_session(&self, account_id: i64, session_id: &str) {
+        if let Err(e) = self.store.update_captured_session(account_id, session_id).await {
+            warn!("persist captured session failed for {}: {}", account_id, e);
+        }
+    }
+
     /// 尝试获取 API 令牌维度的并发槽位。
     pub async fn acquire_token_slot(&self, token_id: i64, max: i32) -> Result<bool, AppError> {
         let key = format!("concurrency:token:{}", token_id);

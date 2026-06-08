@@ -21,6 +21,7 @@ export interface FormState {
   virtual_user: string;
   virtual_git_name: string;
   path_mode: string;
+  session_mode: string;
   recapture_days: number;
   max_sessions: number;
   allowed_client_types: string[];
@@ -52,6 +53,7 @@ export function emptyForm(): FormState {
     concurrency: 10, priority: 50, auto_telemetry: false, rpm_limit: 40,
     identity_mode: 'normalize', virtual_user: '', virtual_git_name: '',
     path_mode: 'simulate',
+    session_mode: 'rotate',
     recapture_days: 0, max_sessions: 6, allowed_client_types: [],
     window_5h_cost_cap_usd: 250,
   };
@@ -77,6 +79,7 @@ export function formFromAccount(a: Account): FormState {
     virtual_user: a.virtual_user || '',
     virtual_git_name: a.virtual_git_name || '',
     path_mode: a.path_mode || 'simulate',
+    session_mode: a.session_mode === 'off' ? 'off' : 'rotate',
     recapture_days: a.recapture_days ?? 0,
     max_sessions: a.max_sessions ?? 3,
     allowed_client_types: (a.allowed_client_types || '').split(',').map((s) => s.trim()).filter(Boolean),

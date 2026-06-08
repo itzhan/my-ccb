@@ -578,14 +578,10 @@ impl Rewriter {
         let shell_repl = format!("Shell: {}", pe.shell);
         let os_repl = format!("OS Version: {}", pe.os_version);
 
-        // 兜底虚拟项目：按会话 id 稳定派生（同一对话始终是同一个虚拟项目）
-        let session_id = body
-            .get("metadata")
-            .and_then(|m| m.get("user_id"))
-            .and_then(|u| u.as_str())
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|j| j.get("session_id").and_then(|x| x.as_str()).map(String::from))
-            .unwrap_or_default();
+        // 兜底虚拟项目：按【真实】会话 id 稳定派生（同一对话始终是同一个虚拟项目，保证路径
+        // 改写每对话稳定、不破 prompt 缓存）。注意：这里必须用真实 session，session_id 的归一化
+        // 轮换在本函数之后由网关覆盖，绝不能影响 virtual_project 的派生。
+        let session_id = get_user_session_id(body);
         let vproj = crate::model::identity::virtual_project(&session_id);
         let vproj_dir = format!("{}/{}", home_plain, vproj); // /Users/vuser/<vproj>
         let vproj_slug = format!("{}-{}", home_slug, vproj); // -Users-vuser-<vproj>
@@ -1454,6 +1450,44 @@ fn strip_empty_text_blocks(body: &mut serde_json::Value) {
             if let Some(content) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
                 filter_blocks(content);
             }
+        }
+    }
+}
+
+/// 取 CC 客户端 body 里 `metadata.user_id`(那层 JSON 编码的字符串)内的 `session_id`。
+pub fn get_user_session_id(body: &serde_json::Value) -> String {
+    body.get("metadata")
+        .and_then(|m| m.get("user_id"))
+        .and_then(|u| u.as_str())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|j| j.get("session_id").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
+/// 把 `metadata.user_id` 内的 `session_id` 覆盖为给定值(其余字段不动、保持原 key 顺序)。
+/// 仅当原 user_id 是含 `session_id` 字段的 JSON 对象时才改;否则不动,避免给非标准 user_id 注入。
+pub fn set_user_session_id(body: &mut serde_json::Value, session_id: &str) {
+    let cur = match body
+        .get("metadata")
+        .and_then(|m| m.get("user_id"))
+        .and_then(|u| u.as_str())
+    {
+        Some(s) => s.to_string(),
+        None => return,
+    };
+    if let Ok(mut uid) = serde_json::from_str::<serde_json::Value>(&cur) {
+        match uid.as_object_mut() {
+            Some(obj) if obj.contains_key("session_id") => {
+                obj.insert(
+                    "session_id".into(),
+                    serde_json::Value::String(session_id.to_string()),
+                );
+            }
+            _ => return,
+        }
+        let new_str = serde_json::to_string(&uid).unwrap_or(cur);
+        if let Some(metadata) = body.get_mut("metadata").and_then(|m| m.as_object_mut()) {
+            metadata.insert("user_id".into(), serde_json::Value::String(new_str));
         }
     }
 }

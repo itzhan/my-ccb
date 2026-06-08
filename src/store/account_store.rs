@@ -121,7 +121,12 @@ impl AccountStore {
             virtual_user: row.try_get::<String, _>("virtual_user").unwrap_or_default(),
             virtual_git_name: row.try_get::<String, _>("virtual_git_name").unwrap_or_default(),
             path_mode: row.try_get::<String, _>("path_mode").unwrap_or_default(),
+            session_mode: row.try_get::<String, _>("session_mode").unwrap_or_default(),
             identity_captured_at: Self::parse_optional_time(row, "identity_captured_at"),
+            captured_session_id: row
+                .try_get::<String, _>("captured_session_id")
+                .unwrap_or_default(),
+            captured_session_at: Self::parse_optional_time(row, "captured_session_at"),
             recapture_days: row.try_get::<i64, _>("recapture_days").unwrap_or(0),
             max_sessions: row.try_get::<i32, _>("max_sessions").unwrap_or(3),
             allowed_client_types: row
@@ -170,8 +175,8 @@ impl AccountStore {
                 billing_mode, account_uuid, organization_uuid, subscription_type,
                 concurrency, priority, auto_telemetry, rpm_limit,
                 identity_mode, virtual_user, virtual_git_name, recapture_days, max_sessions,
-                allowed_client_types, window_5h_cost_cap_usd, path_mode)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
+                allowed_client_types, window_5h_cost_cap_usd, path_mode, session_mode)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
             RETURNING id, created_at, updated_at"#,
             self.ts(9), self.ts(10), "$11"
         );
@@ -207,6 +212,7 @@ impl AccountStore {
         .bind(&a.allowed_client_types)
         .bind(window_5h_cap_val)
         .bind(&a.path_mode)
+        .bind(&a.session_mode)
         .fetch_one(&self.pool)
         .await?;
 
@@ -229,8 +235,9 @@ impl AccountStore {
                 account_uuid=$13, organization_uuid=$14, subscription_type=$15,
                 concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19,
                 identity_mode=$20, virtual_user=$21, virtual_git_name=$22, recapture_days=$23,
-                max_sessions=$24, allowed_client_types=$25, window_5h_cost_cap_usd=$26, path_mode=$27, updated_at={}
-            WHERE id=$28"#,
+                max_sessions=$24, allowed_client_types=$25, window_5h_cost_cap_usd=$26, path_mode=$27,
+                session_mode=$28, updated_at={}
+            WHERE id=$29"#,
             self.ts(8), self.ts(9), self.now_expr()
         );
         sqlx::query(&q)
@@ -261,6 +268,7 @@ impl AccountStore {
             .bind(&a.allowed_client_types)
             .bind(window_5h_cap_val)
             .bind(&a.path_mode)
+            .bind(&a.session_mode)
             .bind(a.id)
             .execute(&self.pool)
             .await?;
@@ -283,6 +291,26 @@ impl AccountStore {
         );
         sqlx::query(&q)
             .bind(&env_str)
+            .bind(at_str)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 更新当前对上游呈现的 session_id（每 15-20min 轮换吸取时调用）及其吸取时间。展示用。
+    pub async fn update_captured_session(
+        &self,
+        id: i64,
+        session_id: &str,
+    ) -> Result<(), AppError> {
+        let at_str = self.fmt_time(Utc::now());
+        let q = format!(
+            "UPDATE accounts SET captured_session_id=$1, captured_session_at={} WHERE id=$3",
+            self.ts(2)
+        );
+        sqlx::query(&q)
+            .bind(session_id)
             .bind(at_str)
             .bind(id)
             .execute(&self.pool)
@@ -625,7 +653,7 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     disable_reason, auto_telemetry, telemetry_count, rpm_limit,
     usage_data, usage_fetched_at, identity_mode, virtual_user, virtual_git_name,
     identity_captured_at, recapture_days, max_sessions, allowed_client_types,
-    window_5h_cost_cap_usd, path_mode,
+    window_5h_cost_cap_usd, path_mode, captured_session_id, captured_session_at, session_mode,
     created_at, updated_at"#;
 
 #[cfg(test)]
