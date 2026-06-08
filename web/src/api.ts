@@ -61,6 +61,8 @@ export interface Account {
   current_concurrency?: number
   max_sessions?: number
   current_sessions?: number
+  current_devices?: number
+  current_window_sessions?: number
   allowed_client_types?: string
   window_5h_cost_cap_usd?: number | null
   cost_5h_usd?: number

@@ -296,6 +296,7 @@ export default function Accounts() {
                 <TableHead>状态</TableHead>
                 <TableHead>并发</TableHead>
                 <TableHead>会话</TableHead>
+                <TableHead>今日配额<br/>设备/会话</TableHead>
                 <TableHead>RPM</TableHead>
                 <TableHead>5h 配额 ($)</TableHead>
                 <TableHead>用量(5h/7d/Son · 重置)</TableHead>
@@ -339,6 +340,15 @@ export default function Accounts() {
                     {/* 会话 */}
                     <TableCell className={cn('text-sm font-medium', a.max_sessions && (a.current_sessions || 0) >= a.max_sessions ? 'text-red-500' : (a.current_sessions || 0) > 0 ? 'text-emerald-600' : 'text-neutral-700')}>
                       {a.current_sessions || 0} / {a.max_sessions || '∞'}
+                    </TableCell>
+                    {/* 今日配额:设备/会话(北京时间固定窗口用量) */}
+                    <TableCell className="text-[11px] leading-tight">
+                      <div className={cn('font-medium', a.device_quota && (a.current_devices || 0) >= a.device_quota ? 'text-red-500' : (a.current_devices || 0) > 0 ? 'text-emerald-600' : 'text-neutral-600')} title="今日(北京时间)已承接的不同设备数 / 设备配额">
+                        设 {a.current_devices || 0}/{a.device_quota || '∞'}
+                      </div>
+                      <div className={cn('font-medium', a.session_quota && (a.current_window_sessions || 0) >= a.session_quota ? 'text-red-500' : (a.current_window_sessions || 0) > 0 ? 'text-emerald-600' : 'text-neutral-600')} title="今日(北京时间)已承接的不同会话数 / 会话配额">
+                        话 {a.current_window_sessions || 0}/{a.session_quota || '∞'}
+                      </div>
                     </TableCell>
                     {/* RPM(纯数字,无进度条) */}
                     <TableCell>
@@ -436,7 +446,7 @@ export default function Accounts() {
               })}
               {pageItems.length === 0 && (
                 <TableRow className="border-0 hover:bg-transparent">
-                  <TableCell colSpan={10} className="py-16">
+                  <TableCell colSpan={11} className="py-16">
                     <div className="flex flex-col items-center justify-center text-neutral-400">
                       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-neutral-100"><Users className="h-6 w-6 text-indigo-400" /></div>
                       <p className="text-sm">{allAccounts.length === 0 ? '暂无账号，点击"添加账号"开始' : '没有匹配的账号'}</p>

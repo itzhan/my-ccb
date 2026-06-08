@@ -176,6 +176,10 @@ async fn list_accounts(
         // 实时并发占用数 + 活跃会话数
         obj["current_concurrency"] = serde_json::json!(state.account_svc.get_slot_count(a.id).await);
         obj["current_sessions"] = serde_json::json!(state.account_svc.session_count(a.id).await);
+        // 当天(北京时间固定窗口)已承接的不同设备数 / 不同会话数(配额用量)
+        let (cur_devices, cur_window_sessions) = state.account_svc.quota_usage(a.id).await;
+        obj["current_devices"] = serde_json::json!(cur_devices);
+        obj["current_window_sessions"] = serde_json::json!(cur_window_sessions);
         // 5h 滑动窗口的累计消费(USD,按官方价格表计算)
         obj["cost_5h_usd"] = serde_json::json!(state.account_svc.five_hour_cost(a.id).await);
         // 该账号当前呈现的虚拟身份（自定义优先，留空则派生）+ 机器指纹，供详情展示

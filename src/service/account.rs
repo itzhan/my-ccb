@@ -292,6 +292,11 @@ impl AccountService {
         self.cache.session_count(account_id, SESSION_TTL).await
     }
 
+    /// 账号本固定窗口(北京时间当天)已承接的不同设备数 / 不同会话数(配额用量展示用)。
+    pub async fn quota_usage(&self, account_id: i64) -> (i64, i64) {
+        self.cache.quota_counts(account_id, QUOTA_TTL).await
+    }
+
     /// 账号过去 5 小时累计消费(USD,内存缓存 60s)。
     pub async fn five_hour_cost(&self, account_id: i64) -> f64 {
         if let Some(c) = cost_cache_get(account_id) {
