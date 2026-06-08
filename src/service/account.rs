@@ -19,8 +19,9 @@ const STICKY_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OAUTH_REFRESH_BUFFER_SECONDS: i64 = 5 * 60;
 /// 会话空闲多久视为结束、自动腾出并发会话名额。
 const SESSION_TTL: Duration = Duration::from_secs(60);
-/// 账号设备/会话「总量配额」的滚动窗口(24h):窗口内服务过的不同设备数 / 不同会话数
-/// 各自不超过账号的 device_quota / session_quota;闲置 24h 后自动腾位、账号循环复用。
+/// 账号设备/会话「总量配额」的【固定窗口】长度(24h,按 epoch/86400 对齐到日历日):
+/// 同一固定窗口内该号服务过的不同设备数 / 不同会话数各自不超过 device_quota / session_quota;
+/// 到下一个 24h 窗口整体清零、配额重置(不是滑动窗口)。
 const QUOTA_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 所有号都满时,新会话排队的重试间隔与最大次数(约 20s)。
 const SESSION_WAIT_RETRY: Duration = Duration::from_millis(500);

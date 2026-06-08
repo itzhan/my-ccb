@@ -27,10 +27,10 @@ pub struct MemoryStore {
     counters: Mutex<HashMap<String, CounterEntry>>,
     /// account_id -> (session_id -> 最后活动时间)
     acct_sessions: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
-    /// 配额(滚动窗口):account_id -> (device_id -> 最后活动时间)
-    acct_quota_devices: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
-    /// 配额(滚动窗口):account_id -> (session_id -> 最后活动时间)
-    acct_quota_sessions: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
+    /// 配额(固定窗口):account_id -> (device_id -> 该成员所属窗口编号 win=epoch/window_secs)
+    acct_quota_devices: Mutex<HashMap<i64, HashMap<String, u64>>>,
+    /// 配额(固定窗口):account_id -> (session_id -> 窗口编号)
+    acct_quota_sessions: Mutex<HashMap<i64, HashMap<String, u64>>>,
 }
 
 impl MemoryStore {
@@ -154,14 +154,21 @@ impl CacheStore for MemoryStore {
         ttl: Duration,
         force: bool,
     ) -> bool {
-        let now = tokio::time::Instant::now();
+        // 固定窗口编号:win = epoch_secs / window_secs(window_secs=ttl,即按日历日对齐,到点整体清零)。
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let window = ttl.as_secs().max(1);
+        let win = now_secs / window;
         // 始终先锁 devices 再锁 sessions,避免与其它路径产生死锁。
         let mut devmap = self.acct_quota_devices.lock().await;
         let mut sessmap = self.acct_quota_sessions.lock().await;
         let dset = devmap.entry(account_id).or_default();
         let sset = sessmap.entry(account_id).or_default();
-        dset.retain(|_, last| now.duration_since(*last) < ttl);
-        sset.retain(|_, last| now.duration_since(*last) < ttl);
+        // 跨窗口:上一窗口的记录整体作废(固定窗口,不是滑动)。
+        dset.retain(|_, w| *w == win);
+        sset.retain(|_, w| *w == win);
         let dev_ok = force
             || device_id.is_empty()
             || max_devices <= 0
@@ -174,10 +181,10 @@ impl CacheStore for MemoryStore {
             || (sset.len() as i32) < max_sessions;
         if dev_ok && sess_ok {
             if !device_id.is_empty() {
-                dset.insert(device_id.to_string(), now);
+                dset.insert(device_id.to_string(), win);
             }
             if !session_id.is_empty() {
-                sset.insert(session_id.to_string(), now);
+                sset.insert(session_id.to_string(), win);
             }
             true
         } else {
@@ -186,14 +193,14 @@ impl CacheStore for MemoryStore {
     }
 
     async fn quota_counts(&self, account_id: i64, ttl: Duration) -> (i64, i64) {
-        let now = tokio::time::Instant::now();
-        let cnt = |map: &HashMap<i64, HashMap<String, tokio::time::Instant>>| -> i64 {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let win = now_secs / ttl.as_secs().max(1);
+        let cnt = |map: &HashMap<i64, HashMap<String, u64>>| -> i64 {
             map.get(&account_id)
-                .map(|s| {
-                    s.values()
-                        .filter(|last| now.duration_since(**last) < ttl)
-                        .count() as i64
-                })
+                .map(|s| s.values().filter(|w| **w == win).count() as i64)
                 .unwrap_or(0)
         };
         let d = cnt(&*self.acct_quota_devices.lock().await);

@@ -322,10 +322,18 @@ impl GatewayService {
             _ => None,
         };
 
-        // 生成会话哈希:CC 客户端优先用 x-claude-code-session-id(权威会话标识,且与并发会话限制对齐);
-        // 否则回退到内容哈希。这样一条会话稳定粘在一个号,不同会话彼此独立。
+        // 客户端真实设备 id(用于复合粘性键 + 账号设备配额计数;发往上游时仍归一化成账号虚拟 device_id)。
+        let log_device_id = crate::service::rewriter::get_user_device_id(&body_map);
+
+        // 生成会话哈希:CC 客户端用 device_id + x-claude-code-session-id 复合键作为粘性标识 ——
+        // 同一(设备+会话)24h 内稳定命中同一个账号(账号不可调度时才重绑别的号);
+        // 否则回退到内容哈希。device 缺失时退化为仅 session(真实 CC 一般都带 device)。
         let session_hash = if client_type == ClientType::ClaudeCode && !log_session_id.is_empty() {
-            format!("ccsid:{}", log_session_id)
+            if log_device_id.is_empty() {
+                format!("ccsid:{}", log_session_id)
+            } else {
+                format!("ccsid:{}:{}", log_device_id, log_session_id)
+            }
         } else {
             crate::service::account::generate_session_hash(&ua, &body_map, client_type)
         };
@@ -337,10 +345,7 @@ impl GatewayService {
             (vec![], vec![])
         };
 
-        // 并发会话限制:为该 x-claude-code-session-id 占一个有会话容量的号(满则排队等待),
-        // 避免"一个号同时挂太多独立会话"被 Anthropic 判定共号。
-        // 客户端真实设备 id(用于账号设备配额计数;发往上游时仍归一化成账号虚拟 device_id)。
-        let log_device_id = crate::service::rewriter::get_user_device_id(&body_map);
+        // 并发会话限制 + 24h 配额准入:为该会话占一个有容量的号(满则排队/换号)。
         if client_type == ClientType::ClaudeCode
             && !self
                 .account_svc

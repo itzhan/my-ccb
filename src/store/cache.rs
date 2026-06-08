@@ -36,7 +36,7 @@ pub trait CacheStore: Send + Sync {
     /// force=true(已粘性绑定的老会话)直接通过。每个维度:空 id 或 max<=0(不限)或成员已在集合内
     /// 或集合未满(< max)→该维度可准入。仅当设备、会话两维度都可准入时,才把两者各自登记进窗口集合
     /// 并返回 true;任一维度已满则【不登记】、返回 false(该账号本轮配额满,改选别的号)。
-    /// ttl 内无活动的成员自动过期腾位(默认 24h 滚动窗口)。
+    /// 【固定窗口】:窗口编号 win=epoch/ttl(按日历日对齐),到下一个窗口整体清零、配额重置(非滑动)。
     async fn account_quota_admit(
         &self,
         account_id: i64,

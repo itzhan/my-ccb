@@ -210,12 +210,12 @@ pub struct Account {
     /// 槽位池:真实会话哈希分流到 3-4 个虚拟 session,每槽 15-20min 轮换。详见 session_pool_size()。
     #[serde(default)]
     pub session_mode: String,
-    /// 设备配额:24h 滚动窗口内该账号最多服务的不同(客户端真实)设备数;超过则新设备改选别的号。
-    /// 默认 10;<=0 不限。注意发往上游的 device_id 仍是账号固定虚拟值,此配额只控"承接面"。
+    /// 设备配额:每个 24h 固定窗口内该账号最多服务的不同(客户端真实)设备数;超过则新设备改选别的号,
+    /// 到下一窗口清零重置。默认 10;<=0 不限。发往上游的 device_id 仍是账号固定虚拟值,此配额只控"承接面"。
     #[serde(default = "default_device_quota")]
     pub device_quota: i32,
-    /// 会话配额:24h 滚动窗口内该账号最多服务的不同会话(session_id)数;超过则新会话改选别的号。
-    /// 默认 20;<=0 不限。与瞬时并发上限 max_sessions 叠加(双层保护)。
+    /// 会话配额:每个 24h 固定窗口内该账号最多服务的不同会话(session_id)数;超过则新会话改选别的号,
+    /// 到下一窗口清零重置。默认 20;<=0 不限。与瞬时并发上限 max_sessions 叠加(双层保护)。
     #[serde(default = "default_session_quota")]
     pub session_quota: i32,
     /// 版本坐标(CC 版本/package/runtime)从首个真实请求吸取的时间；None=尚未吸取。
