@@ -160,7 +160,8 @@ impl CacheStore for MemoryStore {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let window = ttl.as_secs().max(1);
-        let win = now_secs / window;
+        // 固定窗口对齐北京时间(UTC+8)0 点:加 8h 偏移再整除,窗口在北京 0 点滚动重置。
+        let win = (now_secs + 8 * 3600) / window;
         // 始终先锁 devices 再锁 sessions,避免与其它路径产生死锁。
         let mut devmap = self.acct_quota_devices.lock().await;
         let mut sessmap = self.acct_quota_sessions.lock().await;
@@ -197,7 +198,7 @@ impl CacheStore for MemoryStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let win = now_secs / ttl.as_secs().max(1);
+        let win = (now_secs + 8 * 3600) / ttl.as_secs().max(1); // 北京时间(UTC+8)对齐
         let cnt = |map: &HashMap<i64, HashMap<String, u64>>| -> i64 {
             map.get(&account_id)
                 .map(|s| s.values().filter(|w| **w == win).count() as i64)

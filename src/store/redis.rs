@@ -178,7 +178,8 @@ impl CacheStore for RedisStore {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let window = ttl.as_secs().max(1);
-        let win = now_secs / window;
+        // 固定窗口对齐北京时间(UTC+8)0 点:加 8h 偏移再整除。
+        let win = (now_secs + 8 * 3600) / window;
         let dkey = format!("quota:dev:{}:{}", account_id, win);
         let skey = format!("quota:sess:{}:{}", account_id, win);
         let mut conn = self.client.clone();
@@ -228,7 +229,7 @@ impl CacheStore for RedisStore {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let win = now_secs / ttl.as_secs().max(1);
+        let win = (now_secs + 8 * 3600) / ttl.as_secs().max(1); // 北京时间(UTC+8)对齐
         let mut conn = self.client.clone();
         let d: i64 = redis::cmd("SCARD")
             .arg(format!("quota:dev:{}:{}", account_id, win))

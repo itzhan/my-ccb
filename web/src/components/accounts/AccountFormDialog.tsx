@@ -170,7 +170,7 @@ export function AccountFormDialog({
               <Input type="number" min={0} value={form.session_quota} onChange={(e) => patch({ session_quota: Number(e.target.value) })} />
             </div>
           </div>
-          <p className="-mt-1 text-[11px] text-muted-foreground">每个 24h 固定窗口内,该账号最多承接这么多个不同设备 / 不同会话;超过则新设备/会话改选别的号(此号本窗口被限),到下个窗口清零重置(非滑动)。已绑定的设备+会话仍继续命中原号。发往上游的设备 id 仍是模拟值。默认 10 / 20。</p>
+          <p className="-mt-1 text-[11px] text-muted-foreground">每个 24h 固定窗口内,该账号最多承接这么多个不同设备 / 不同会话;超过则新设备/会话改选别的号(此号本窗口被限),每天北京时间 0 点整体清零重置(固定窗口、非滑动)。已绑定的会话仍继续命中原号。发往上游的设备 id 仍是模拟值。默认 10 / 20。</p>
 
           <div className="flex gap-4">
             <div className="flex-1 space-y-2">

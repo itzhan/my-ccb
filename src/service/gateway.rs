@@ -322,18 +322,13 @@ impl GatewayService {
             _ => None,
         };
 
-        // 客户端真实设备 id(用于复合粘性键 + 账号设备配额计数;发往上游时仍归一化成账号虚拟 device_id)。
+        // 客户端真实设备 id(仅用于账号设备配额计数;发往上游时仍归一化成账号虚拟 device_id)。
         let log_device_id = crate::service::rewriter::get_user_device_id(&body_map);
 
-        // 生成会话哈希:CC 客户端用 device_id + x-claude-code-session-id 复合键作为粘性标识 ——
-        // 同一(设备+会话)24h 内稳定命中同一个账号(账号不可调度时才重绑别的号);
-        // 否则回退到内容哈希。device 缺失时退化为仅 session(真实 CC 一般都带 device)。
+        // 生成会话哈希:CC 客户端用 x-claude-code-session-id 作为粘性标识 —— 同一会话 24h 内
+        // 稳定命中同一账号(账号不可调度时才重绑别的号);否则回退到内容哈希。
         let session_hash = if client_type == ClientType::ClaudeCode && !log_session_id.is_empty() {
-            if log_device_id.is_empty() {
-                format!("ccsid:{}", log_session_id)
-            } else {
-                format!("ccsid:{}:{}", log_device_id, log_session_id)
-            }
+            format!("ccsid:{}", log_session_id)
         } else {
             crate::service::account::generate_session_hash(&ua, &body_map, client_type)
         };
