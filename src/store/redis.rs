@@ -161,6 +161,88 @@ impl CacheStore for RedisStore {
             .query_async(&mut conn).await.unwrap_or(0)
     }
 
+    async fn account_quota_admit(
+        &self,
+        account_id: i64,
+        device_id: &str,
+        session_id: &str,
+        max_devices: i32,
+        max_sessions: i32,
+        ttl: Duration,
+        force: bool,
+    ) -> bool {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let cutoff = now_ms - ttl.as_millis() as i64;
+        let dkey = format!("quota:dev:account:{}", account_id);
+        let skey = format!("quota:sess:account:{}", account_id);
+        let mut conn = self.client.clone();
+        // 判定某 ZSET 维度是否可准入(空 id / max<=0 / 已存在 / 未满)。
+        async fn dim_ok(
+            conn: &mut redis::aio::ConnectionManager,
+            key: &str,
+            member: &str,
+            max: i32,
+            cutoff: i64,
+            force: bool,
+        ) -> bool {
+            if force || member.is_empty() || max <= 0 {
+                return true;
+            }
+            let _: Result<i64, _> = redis::cmd("ZREMRANGEBYSCORE")
+                .arg(key).arg("-inf").arg(cutoff)
+                .query_async(conn).await;
+            let exists: Option<f64> = redis::cmd("ZSCORE")
+                .arg(key).arg(member)
+                .query_async(conn).await.unwrap_or(None);
+            if exists.is_some() {
+                return true;
+            }
+            let count: i64 = redis::cmd("ZCARD").arg(key)
+                .query_async(conn).await.unwrap_or(0);
+            (count as i32) < max
+        }
+        let dev_ok = dim_ok(&mut conn, &dkey, device_id, max_devices, cutoff, force).await;
+        let sess_ok = dim_ok(&mut conn, &skey, session_id, max_sessions, cutoff, force).await;
+        if !(dev_ok && sess_ok) {
+            return false;
+        }
+        let exp = ttl.as_secs() as i64 + 60;
+        if !device_id.is_empty() {
+            let _: Result<i64, _> = redis::cmd("ZADD")
+                .arg(&dkey).arg(now_ms).arg(device_id).query_async(&mut conn).await;
+            let _: Result<i64, _> = redis::cmd("EXPIRE")
+                .arg(&dkey).arg(exp).query_async(&mut conn).await;
+        }
+        if !session_id.is_empty() {
+            let _: Result<i64, _> = redis::cmd("ZADD")
+                .arg(&skey).arg(now_ms).arg(session_id).query_async(&mut conn).await;
+            let _: Result<i64, _> = redis::cmd("EXPIRE")
+                .arg(&skey).arg(exp).query_async(&mut conn).await;
+        }
+        true
+    }
+
+    async fn quota_counts(&self, account_id: i64, ttl: Duration) -> (i64, i64) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let cutoff = now_ms - ttl.as_millis() as i64;
+        let dkey = format!("quota:dev:account:{}", account_id);
+        let skey = format!("quota:sess:account:{}", account_id);
+        let mut conn = self.client.clone();
+        let _: Result<i64, _> = redis::cmd("ZREMRANGEBYSCORE")
+            .arg(&dkey).arg("-inf").arg(cutoff).query_async(&mut conn).await;
+        let _: Result<i64, _> = redis::cmd("ZREMRANGEBYSCORE")
+            .arg(&skey).arg("-inf").arg(cutoff).query_async(&mut conn).await;
+        let d: i64 = redis::cmd("ZCARD").arg(&dkey).query_async(&mut conn).await.unwrap_or(0);
+        let s: i64 = redis::cmd("ZCARD").arg(&skey).query_async(&mut conn).await.unwrap_or(0);
+        (d, s)
+    }
+
     async fn acquire_lock(
         &self,
         key: &str,

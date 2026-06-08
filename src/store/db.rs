@@ -139,8 +139,17 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
-    // session_id 归一化轮换开关(账号级):''/off=关 / rotate=开
+    // session_id 归一化模式(账号级):''/off=透传(默认) / pool=3-4池 / single=全归1
     sqlx::query("ALTER TABLE accounts ADD COLUMN session_mode TEXT NOT NULL DEFAULT ''")
+        .execute(pool)
+        .await
+        .ok();
+    // 账号 24h 滚动窗口配额:不同设备数上限(默认10)/ 不同会话数上限(默认20)
+    sqlx::query("ALTER TABLE accounts ADD COLUMN device_quota INTEGER NOT NULL DEFAULT 10")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE accounts ADD COLUMN session_quota INTEGER NOT NULL DEFAULT 20")
         .execute(pool)
         .await
         .ok();

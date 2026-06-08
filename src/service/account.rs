@@ -19,6 +19,9 @@ const STICKY_SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const OAUTH_REFRESH_BUFFER_SECONDS: i64 = 5 * 60;
 /// 会话空闲多久视为结束、自动腾出并发会话名额。
 const SESSION_TTL: Duration = Duration::from_secs(60);
+/// 账号设备/会话「总量配额」的滚动窗口(24h):窗口内服务过的不同设备数 / 不同会话数
+/// 各自不超过账号的 device_quota / session_quota;闲置 24h 后自动腾位、账号循环复用。
+const QUOTA_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// 所有号都满时,新会话排队的重试间隔与最大次数(约 20s)。
 const SESSION_WAIT_RETRY: Duration = Duration::from_millis(500);
 const SESSION_WAIT_ATTEMPTS: usize = 40;
@@ -323,6 +326,7 @@ impl AccountService {
     pub async fn admit_session(
         &self,
         session_id: &str,
+        device_id: &str,
         session_hash: &str,
         allowed_ids: &[i64],
         blocked_ids: &[i64],
@@ -345,8 +349,15 @@ impl AccountService {
                                 && id_allowed
                                 && !exhausted
                             {
+                                // 老会话(已粘性绑定)始终放行,并刷新其在并发集合 + 配额窗口的活跃时间。
                                 self.cache
                                     .session_admit(aid, session_id, acc.max_sessions, SESSION_TTL, true)
+                                    .await;
+                                self.cache
+                                    .account_quota_admit(
+                                        aid, device_id, session_id,
+                                        acc.device_quota, acc.session_quota, QUOTA_TTL, true,
+                                    )
                                     .await;
                                 return true;
                             }
@@ -379,10 +390,19 @@ impl AccountService {
                 // 与 select_account 统一:优先级数值小者优先,同优先级选会话最空的号。
                 let ranked = self.rank_candidates(cands).await;
                 for acc in &ranked {
+                    // 新会话:先过瞬时并发上限(max_sessions),再过 24h 总量配额(设备≤device_quota、
+                    // 会话≤session_quota)。两者都过才占号;配额满的号本轮跳过,改选别的号。
                     if self
                         .cache
                         .session_admit(acc.id, session_id, acc.max_sessions, SESSION_TTL, false)
                         .await
+                        && self
+                            .cache
+                            .account_quota_admit(
+                                acc.id, device_id, session_id,
+                                acc.device_quota, acc.session_quota, QUOTA_TTL, false,
+                            )
+                            .await
                     {
                         if !session_hash.is_empty() {
                             let _ = self

@@ -206,10 +206,18 @@ pub struct Account {
     #[serde(default)]
     pub path_mode: String,
     /// session_id 归一化模式(账号级,仅 normalize+CC 下生效):
-    /// ""/"pool"=3-4 槽位池(默认) / "single"=全部坍缩成 1 个 / "off"=透传不归并。
+    /// ""/"off"=透传不归并(默认) / "pool"=3-4 槽位池 / "single"=全部坍缩成 1 个。
     /// 槽位池:真实会话哈希分流到 3-4 个虚拟 session,每槽 15-20min 轮换。详见 session_pool_size()。
     #[serde(default)]
     pub session_mode: String,
+    /// 设备配额:24h 滚动窗口内该账号最多服务的不同(客户端真实)设备数;超过则新设备改选别的号。
+    /// 默认 10;<=0 不限。注意发往上游的 device_id 仍是账号固定虚拟值,此配额只控"承接面"。
+    #[serde(default = "default_device_quota")]
+    pub device_quota: i32,
+    /// 会话配额:24h 滚动窗口内该账号最多服务的不同会话(session_id)数;超过则新会话改选别的号。
+    /// 默认 20;<=0 不限。与瞬时并发上限 max_sessions 叠加(双层保护)。
+    #[serde(default = "default_session_quota")]
+    pub session_quota: i32,
     /// 版本坐标(CC 版本/package/runtime)从首个真实请求吸取的时间；None=尚未吸取。
     #[serde(default)]
     pub identity_captured_at: Option<DateTime<Utc>>,
@@ -239,6 +247,8 @@ pub struct Account {
 fn default_concurrency() -> i32 { 3 }
 fn default_priority() -> i32 { 50 }
 fn default_max_sessions() -> i32 { 3 }
+fn default_device_quota() -> i32 { 10 }
+fn default_session_quota() -> i32 { 20 }
 
 impl Account {
     /// 是否启用 normalize 身份归一化。
@@ -263,9 +273,9 @@ impl Account {
     /// 返回 None 表示该账号不做 session 归一化。
     pub fn session_pool_size(&self) -> Option<usize> {
         match self.session_mode.as_str() {
-            "off" => None,
+            "pool" => Some(3 + (self.id.unsigned_abs() % 2) as usize), // 3 或 4
             "single" => Some(1),
-            _ => Some(3 + (self.id.unsigned_abs() % 2) as usize), // 默认 3 或 4
+            _ => None, // ""/"off"/其它 → 透传不归并(默认)
         }
     }
 

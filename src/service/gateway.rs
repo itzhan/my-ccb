@@ -339,10 +339,12 @@ impl GatewayService {
 
         // 并发会话限制:为该 x-claude-code-session-id 占一个有会话容量的号(满则排队等待),
         // 避免"一个号同时挂太多独立会话"被 Anthropic 判定共号。
+        // 客户端真实设备 id(用于账号设备配额计数;发往上游时仍归一化成账号虚拟 device_id)。
+        let log_device_id = crate::service::rewriter::get_user_device_id(&body_map);
         if client_type == ClientType::ClaudeCode
             && !self
                 .account_svc
-                .admit_session(&log_session_id, &session_hash, &allowed_ids, &blocked_ids)
+                .admit_session(&log_session_id, &log_device_id, &session_hash, &allowed_ids, &blocked_ids)
                 .await
         {
             warn!("session capacity full for session {}", log_session_id);

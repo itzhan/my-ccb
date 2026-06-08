@@ -162,6 +162,8 @@ export default function Accounts() {
         u.virtual_git_name = form.virtual_git_name;
         u.path_mode = form.path_mode;
         u.session_mode = form.session_mode;
+        u.device_quota = Math.max(0, Number(form.device_quota) || 0);
+        u.session_quota = Math.max(0, Number(form.session_quota) || 0);
         u.recapture_days = Number(form.recapture_days) || 0;
         u.max_sessions = Math.max(0, Number(form.max_sessions) || 0);
         u.allowed_client_types = form.allowed_client_types.join(',');
@@ -181,6 +183,8 @@ export default function Accounts() {
           virtual_user: form.virtual_user, virtual_git_name: form.virtual_git_name,
           path_mode: form.path_mode,
           session_mode: form.session_mode,
+          device_quota: Math.max(0, Number(form.device_quota) || 0),
+          session_quota: Math.max(0, Number(form.session_quota) || 0),
           recapture_days: Number(form.recapture_days) || 0,
           max_sessions: Math.max(0, Number(form.max_sessions) || 0),
           allowed_client_types: form.allowed_client_types.join(','),

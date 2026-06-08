@@ -31,6 +31,25 @@ pub trait CacheStore: Send + Sync {
 
     /// 账号当前活跃会话数(ttl 内有请求的不同 session_id 数)。
     async fn session_count(&self, account_id: i64, ttl: Duration) -> i64;
+
+    /// 账号「滚动窗口配额」原子准入:同时管账号在 ttl 窗口内服务过的【不同设备数】与【不同会话数】。
+    /// force=true(已粘性绑定的老会话)直接通过。每个维度:空 id 或 max<=0(不限)或成员已在集合内
+    /// 或集合未满(< max)→该维度可准入。仅当设备、会话两维度都可准入时,才把两者各自登记进窗口集合
+    /// 并返回 true;任一维度已满则【不登记】、返回 false(该账号本轮配额满,改选别的号)。
+    /// ttl 内无活动的成员自动过期腾位(默认 24h 滚动窗口)。
+    async fn account_quota_admit(
+        &self,
+        account_id: i64,
+        device_id: &str,
+        session_id: &str,
+        max_devices: i32,
+        max_sessions: i32,
+        ttl: Duration,
+        force: bool,
+    ) -> bool;
+
+    /// 账号在 ttl 窗口内服务过的不同设备数 / 不同会话数(配额展示用)。
+    async fn quota_counts(&self, account_id: i64, ttl: Duration) -> (i64, i64);
     async fn acquire_lock(
         &self,
         key: &str,

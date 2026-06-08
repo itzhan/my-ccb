@@ -27,6 +27,10 @@ pub struct MemoryStore {
     counters: Mutex<HashMap<String, CounterEntry>>,
     /// account_id -> (session_id -> 最后活动时间)
     acct_sessions: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
+    /// 配额(滚动窗口):account_id -> (device_id -> 最后活动时间)
+    acct_quota_devices: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
+    /// 配额(滚动窗口):account_id -> (session_id -> 最后活动时间)
+    acct_quota_sessions: Mutex<HashMap<i64, HashMap<String, tokio::time::Instant>>>,
 }
 
 impl MemoryStore {
@@ -37,6 +41,8 @@ impl MemoryStore {
             locks: Mutex::new(HashMap::new()),
             counters: Mutex::new(HashMap::new()),
             acct_sessions: Mutex::new(HashMap::new()),
+            acct_quota_devices: Mutex::new(HashMap::new()),
+            acct_quota_sessions: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -136,6 +142,63 @@ impl CacheStore for MemoryStore {
                 .count() as i64,
             None => 0,
         }
+    }
+
+    async fn account_quota_admit(
+        &self,
+        account_id: i64,
+        device_id: &str,
+        session_id: &str,
+        max_devices: i32,
+        max_sessions: i32,
+        ttl: Duration,
+        force: bool,
+    ) -> bool {
+        let now = tokio::time::Instant::now();
+        // 始终先锁 devices 再锁 sessions,避免与其它路径产生死锁。
+        let mut devmap = self.acct_quota_devices.lock().await;
+        let mut sessmap = self.acct_quota_sessions.lock().await;
+        let dset = devmap.entry(account_id).or_default();
+        let sset = sessmap.entry(account_id).or_default();
+        dset.retain(|_, last| now.duration_since(*last) < ttl);
+        sset.retain(|_, last| now.duration_since(*last) < ttl);
+        let dev_ok = force
+            || device_id.is_empty()
+            || max_devices <= 0
+            || dset.contains_key(device_id)
+            || (dset.len() as i32) < max_devices;
+        let sess_ok = force
+            || session_id.is_empty()
+            || max_sessions <= 0
+            || sset.contains_key(session_id)
+            || (sset.len() as i32) < max_sessions;
+        if dev_ok && sess_ok {
+            if !device_id.is_empty() {
+                dset.insert(device_id.to_string(), now);
+            }
+            if !session_id.is_empty() {
+                sset.insert(session_id.to_string(), now);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn quota_counts(&self, account_id: i64, ttl: Duration) -> (i64, i64) {
+        let now = tokio::time::Instant::now();
+        let cnt = |map: &HashMap<i64, HashMap<String, tokio::time::Instant>>| -> i64 {
+            map.get(&account_id)
+                .map(|s| {
+                    s.values()
+                        .filter(|last| now.duration_since(**last) < ttl)
+                        .count() as i64
+                })
+                .unwrap_or(0)
+        };
+        let d = cnt(&*self.acct_quota_devices.lock().await);
+        let s = cnt(&*self.acct_quota_sessions.lock().await);
+        (d, s)
     }
 
     async fn acquire_lock(

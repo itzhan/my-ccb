@@ -1464,6 +1464,17 @@ pub fn get_user_session_id(body: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
+/// 取 CC 客户端 body 里 `metadata.user_id` 内的 `device_id`(客户端真实设备 id,用于配额计数;
+/// 发往上游时仍会被归一化成账号固定虚拟 device_id)。
+pub fn get_user_device_id(body: &serde_json::Value) -> String {
+    body.get("metadata")
+        .and_then(|m| m.get("user_id"))
+        .and_then(|u| u.as_str())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|j| j.get("device_id").and_then(|x| x.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
 /// 把 `metadata.user_id` 内的 `session_id` 覆盖为给定值(其余字段不动、保持原 key 顺序)。
 /// 仅当原 user_id 是含 `session_id` 字段的 JSON 对象时才改;否则不动,避免给非标准 user_id 注入。
 pub fn set_user_session_id(body: &mut serde_json::Value, session_id: &str) {

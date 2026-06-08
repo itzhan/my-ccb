@@ -160,6 +160,17 @@ export function AccountFormDialog({
               <Input type="number" min={1} value={form.priority} onChange={(e) => patch({ priority: Number(e.target.value) })} />
             </div>
           </div>
+          <div className="flex gap-4">
+            <div className="flex-1 space-y-1">
+              <Label>设备配额 / 24h(0=不限)</Label>
+              <Input type="number" min={0} value={form.device_quota} onChange={(e) => patch({ device_quota: Number(e.target.value) })} />
+            </div>
+            <div className="flex-1 space-y-1">
+              <Label>会话配额 / 24h(0=不限)</Label>
+              <Input type="number" min={0} value={form.session_quota} onChange={(e) => patch({ session_quota: Number(e.target.value) })} />
+            </div>
+          </div>
+          <p className="-mt-1 text-[11px] text-muted-foreground">24h 滚动窗口内,该账号最多承接这么多个不同设备 / 不同会话;超过则新设备/会话改选别的号(此号本轮被限)。发往上游的设备 id 仍是模拟值。默认 10 / 20。</p>
 
           <div className="flex gap-4">
             <div className="flex-1 space-y-2">
@@ -233,16 +244,16 @@ export function AccountFormDialog({
                 <div className="space-y-1 pt-1">
                   <Label className="text-xs">session_id 归一化模式</Label>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => patch({ session_mode: 'pool' })} className={seg(form.session_mode !== 'single' && form.session_mode !== 'off', 'emerald')}>池 3-4（推荐）</button>
+                    <button type="button" onClick={() => patch({ session_mode: 'off' })} className={seg(form.session_mode !== 'pool' && form.session_mode !== 'single', 'emerald')}>透传（默认）</button>
+                    <button type="button" onClick={() => patch({ session_mode: 'pool' })} className={seg(form.session_mode === 'pool', 'amber')}>池 3-4</button>
                     <button type="button" onClick={() => patch({ session_mode: 'single' })} className={seg(form.session_mode === 'single', 'amber')}>单个（全归1）</button>
-                    <button type="button" onClick={() => patch({ session_mode: 'off' })} className={seg(form.session_mode === 'off', 'amber')}>透传（不归并）</button>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    {form.session_mode === 'single'
-                      ? '把该设备所有并发会话全部坍缩成 1 个 session_id（每 15-20min 轮换）。最激进，上游只看到 1 路会话——但 1 路会话扛全部高 RPM、内容多话题乱跳，也略反常。'
-                      : form.session_mode === 'off'
-                        ? '不归并：session_id 原样透传，上游看到该设备同时挂几十路并发会话（farm 信号）。仅用于 A/B 对照。'
-                        : '默认推荐：真实会话哈希分流到 3-4 个虚拟 session（每槽 15-20min 轮换），上游看到「一设备 3-4 路并发」，像开了几个窗口的重度真人。既消除几十路 farm 信号，又不留「1 路扛全量」的怪相。'}
+                    {form.session_mode === 'pool'
+                      ? '真实会话哈希分流到 3-4 个虚拟 session（每槽 15-20min 轮换），上游看到「一设备 3-4 路并发」。'
+                      : form.session_mode === 'single'
+                        ? '把该设备所有并发会话坍缩成 1 个 session_id（每 15-20min 轮换），上游只看到 1 路会话。'
+                        : '默认：session_id 原样透传、不做归并。账号的承接面改由上面的「设备/会话配额」控制。'}
                   </p>
                 </div>
                 <div className="space-y-1 pt-1">
