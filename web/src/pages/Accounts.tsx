@@ -391,11 +391,14 @@ export default function Accounts() {
                             ? <span className="text-neutral-400"> v{String(a.canonical_env?.version ?? '')}</span>
                             : <span className="text-amber-600"> 待吸取</span>)}
                         </p>
-                        {a.identity_mode === 'normalize' && (
-                          <p className="truncate text-neutral-400" title={a.captured_session_id ? `当前上游 session（每15-20min吸取轮换）：${a.captured_session_id}${a.captured_session_at ? `\n吸取于 ${a.captured_session_at}` : ''}` : '尚未吸取（首个请求后出现）'}>
-                            sid {a.captured_session_id ? `${a.captured_session_id.slice(0, 8)}…` : '—'}
-                          </p>
-                        )}
+                        {a.identity_mode === 'normalize' && (() => {
+                          const sids = (a.captured_session_id || '').split(',').filter(Boolean);
+                          return (
+                            <p className="truncate text-neutral-400" title={sids.length ? `当前上游 ${sids.length} 个虚拟 session（每槽15-20min轮换）：\n${sids.join('\n')}${a.captured_session_at ? `\n更新于 ${a.captured_session_at}` : ''}` : '尚未吸取（首个请求后出现）'}>
+                              sid×{sids.length || 0} {sids.length ? `${sids[0].slice(0, 8)}…` : '—'}
+                            </p>
+                          );
+                        })()}
                         <p className={a.auto_telemetry ? 'text-emerald-600' : 'text-neutral-500'}>
                           遥测{a.auto_telemetry ? '开' : '关'}{a.telemetry_count > 0 && <span className="text-neutral-400"> ·{a.telemetry_count}</span>}
                         </p>

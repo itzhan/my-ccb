@@ -231,15 +231,18 @@ export function AccountFormDialog({
                   </p>
                 </div>
                 <div className="space-y-1 pt-1">
-                  <Label className="text-xs">session_id 归一化轮换（A/B 测试封号）</Label>
+                  <Label className="text-xs">session_id 归一化模式</Label>
                   <div className="flex gap-2">
-                    <button type="button" onClick={() => patch({ session_mode: 'rotate' })} className={seg(form.session_mode === 'rotate', 'emerald')}>开（每15-20min吸取轮换）</button>
-                    <button type="button" onClick={() => patch({ session_mode: 'off' })} className={seg(form.session_mode !== 'rotate', 'amber')}>关（原样透传）</button>
+                    <button type="button" onClick={() => patch({ session_mode: 'pool' })} className={seg(form.session_mode !== 'single' && form.session_mode !== 'off', 'emerald')}>池 3-4（推荐）</button>
+                    <button type="button" onClick={() => patch({ session_mode: 'single' })} className={seg(form.session_mode === 'single', 'amber')}>单个（全归1）</button>
+                    <button type="button" onClick={() => patch({ session_mode: 'off' })} className={seg(form.session_mode === 'off', 'amber')}>透传（不归并）</button>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    {form.session_mode === 'rotate'
-                      ? '把并发会话坍缩成单个 session_id，每 15-20 分钟从真实请求吸取一个新的。上游看到「一设备+当前一个会话」，消除「一设备多并发会话」的共号信号。详情页可看到当前吸取的 sid。'
-                      : '默认：session_id 原样透传，上游会看到该设备同时挂多个并发会话。开启另一半账号做对照，验证是否此信号导致封号。'}
+                    {form.session_mode === 'single'
+                      ? '把该设备所有并发会话全部坍缩成 1 个 session_id（每 15-20min 轮换）。最激进，上游只看到 1 路会话——但 1 路会话扛全部高 RPM、内容多话题乱跳，也略反常。'
+                      : form.session_mode === 'off'
+                        ? '不归并：session_id 原样透传，上游看到该设备同时挂几十路并发会话（farm 信号）。仅用于 A/B 对照。'
+                        : '默认推荐：真实会话哈希分流到 3-4 个虚拟 session（每槽 15-20min 轮换），上游看到「一设备 3-4 路并发」，像开了几个窗口的重度真人。既消除几十路 farm 信号，又不留「1 路扛全量」的怪相。'}
                   </p>
                 </div>
                 <div className="space-y-1 pt-1">

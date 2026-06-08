@@ -105,6 +105,17 @@ fn mask_proxy(p: &str) -> String {
     p.to_string()
 }
 
+/// FNV-1a 64 位哈希:把真实 session 字符串确定性地映射到固定槽位
+/// (同一字符串总落同一槽,保证同一对话的虚拟 session 稳定)。
+fn fnv1a(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
 const UPSTREAM_BASE: &str = "https://api.anthropic.com";
 
 /// 最大换号次数。
@@ -136,10 +147,10 @@ pub struct GatewayService {
     usage_recorder: UsageRecorder,
     /// thinking 块 400 自动整流重试开关（设置页可切换）。
     thinking_repair: Arc<std::sync::atomic::AtomicBool>,
-    /// normalize 模式下每账号「当前对上游呈现的 session_id」+ 吸取时刻。
-    /// 每 15-20 分钟从真实请求吸取轮换一次，把一台虚拟设备的并发会话坍缩成单个会话，
-    /// 消除「一设备多并发 session」的共号封号信号。in-process 易失，重启后首请求重新吸取。
-    session_rotator: Arc<std::sync::Mutex<std::collections::HashMap<i64, (String, std::time::Instant)>>>,
+    /// normalize 模式下每账号的「3-4 个虚拟 session 槽」(每槽:虚拟 session + 吸取时刻)。
+    /// 真实会话哈希映射到某槽,每槽每 15-20 分钟轮换吸取一次。上游看到该设备 3-4 路并发会话
+    /// (像重度真人),消除「一设备几十路并发」的 farm 信号。in-process 易失,重启后重新吸取。
+    session_pool: Arc<std::sync::Mutex<std::collections::HashMap<i64, Vec<Option<(String, std::time::Instant)>>>>>,
 }
 
 impl GatewayService {
@@ -164,35 +175,49 @@ impl GatewayService {
             default_rpm_limit,
             usage_recorder,
             thinking_repair,
-            session_rotator: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            session_pool: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
-    /// 返回该账号当前应呈现给上游的 session_id（每 15-20 分钟从真实请求吸取轮换一次）。
-    /// 窗口内复用同一个值；到期/首次则吸取本请求的真实 session_id 作为新值，并异步落库供面板展示。
-    /// `incoming` 为空时返回空串（不处理）。窗口按账号取模错峰（各号不在同一时刻轮换）。
-    fn rotate_session_id(&self, account_id: i64, incoming: &str) -> String {
+    /// 把进来的真实 session_id 映射到该账号的「3-4 个虚拟 session 槽」之一,返回对应槽位
+    /// 当前的虚拟 session。效果:上游看到该设备同时有 3-4 个会话(像开了几个窗口/agent 的
+    /// 重度真人),而不是几十路并发(farm)、也不是 1 路(怪异的单会话扛全量)。
+    ///
+    /// - 槽数 N=3 或 4(按账号取模,各号略不同);
+    /// - 同一个真实对话用 FNV 哈希恒定落到同一个槽 → 该对话的 session_id 对上游稳定(多轮连续);
+    /// - 每个槽各自每 15-20 分钟轮换一次(到期就吸取那一刻映射进来的真实 session);
+    /// - 任一槽变化时,把该账号当前所有槽的虚拟值(逗号分隔)异步落库供面板展示。
+    /// `pool_size` 为槽数(single 模式传 1,pool 模式传 3-4);`incoming` 为空返回空串(不处理)。
+    fn map_session_id(&self, account_id: i64, incoming: &str, pool_size: usize) -> String {
         if incoming.is_empty() {
             return String::new();
         }
+        let n = pool_size.max(1); // 槽数:1=全坍缩,3-4=池
         let window =
             std::time::Duration::from_secs(900 + (account_id.unsigned_abs() % 6) * 60); // 15-20min
-        let (val, rotated) = {
-            let mut map = self.session_rotator.lock().unwrap();
-            match map.get(&account_id) {
+        let slot = (fnv1a(incoming) % n as u64) as usize;
+        let (val, changed, snapshot) = {
+            let mut map = self.session_pool.lock().unwrap();
+            let slots = map.entry(account_id).or_insert_with(|| vec![None; n]);
+            let (v, changed) = match &slots[slot] {
                 Some((sid, at)) if at.elapsed() < window => (sid.clone(), false),
                 _ => {
-                    map.insert(account_id, (incoming.to_string(), std::time::Instant::now()));
+                    slots[slot] = Some((incoming.to_string(), std::time::Instant::now()));
                     (incoming.to_string(), true)
                 }
-            }
+            };
+            let snap: Vec<String> = slots
+                .iter()
+                .filter_map(|s| s.as_ref().map(|(x, _)| x.clone()))
+                .collect();
+            (v, changed, snap)
         };
-        if rotated {
-            // 轮换时把当前吸取的 session 异步写库（纯展示用，热路径不读库）。
+        if changed {
+            // 某个槽轮换/首次填充时,把当前所有槽的虚拟值异步写库(纯展示用,热路径不读库)。
             let svc = self.account_svc.clone();
-            let sid = val.clone();
+            let joined = snapshot.join(",");
             tokio::spawn(async move {
-                svc.persist_captured_session(account_id, &sid).await;
+                svc.persist_captured_session(account_id, &joined).await;
             });
         }
         val
@@ -474,15 +499,15 @@ impl GatewayService {
                     // 会话坍缩成单会话(消除"一设备多并发 session"封号信号)。
                     // ⚠️ 必须在 normalize_cc_identity 之后:那里已用【真实】session 派生 virtual_project
                     //    (保证路径每对话稳定、不破缓存);这里才把上游遥测看到的 session_id 换成虚拟值。
-                    let virt_sid = if account.session_rotate_enabled() {
+                    let virt_sid = if let Some(psize) = account.session_pool_size() {
                         let incoming = crate::service::rewriter::get_user_session_id(&bm);
-                        let v = self.rotate_session_id(account.id, &incoming);
+                        let v = self.map_session_id(account.id, &incoming, psize);
                         if !v.is_empty() {
                             crate::service::rewriter::set_user_session_id(&mut bm, &v);
                         }
                         v
                     } else {
-                        String::new() // 开关关闭:session_id 原样透传(当前行为),便于 A/B 对照封号
+                        String::new() // off:session_id 原样透传(不归并),便于 A/B 对照封号
                     };
                     // 漏点A:版本坐标始终从本请求自身提取,让 header 版本 == body 版本(消除不一致)
                     let pkg = headers

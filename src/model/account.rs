@@ -205,18 +205,18 @@ pub struct Account {
     /// normalize 模式下的路径处理：空=回退全局默认 / "simulate"=改写真实路径用户名 / "passthrough"=真实路径原样透传。
     #[serde(default)]
     pub path_mode: String,
-    /// session_id 归一化轮换开关(账号级)：""=默认开 / "rotate"=开 / "off"=关。
-    /// 开=每 15-20min 从真实请求吸取轮换,把并发会话坍缩成单会话；关=session_id 原样透传。
-    /// 仅 normalize+CC 下生效。默认开(空串即开),便于直接生效;要关需显式设 "off"。
+    /// session_id 归一化模式(账号级,仅 normalize+CC 下生效):
+    /// ""/"pool"=3-4 槽位池(默认) / "single"=全部坍缩成 1 个 / "off"=透传不归并。
+    /// 槽位池:真实会话哈希分流到 3-4 个虚拟 session,每槽 15-20min 轮换。详见 session_pool_size()。
     #[serde(default)]
     pub session_mode: String,
     /// 版本坐标(CC 版本/package/runtime)从首个真实请求吸取的时间；None=尚未吸取。
     #[serde(default)]
     pub identity_captured_at: Option<DateTime<Utc>>,
-    /// normalize 模式下当前对上游呈现的 session_id(每 15-20min 从真实请求吸取轮换一次)。展示用。
+    /// normalize 模式下当前对上游呈现的 3-4 个虚拟 session(逗号分隔,每槽 15-20min 轮换)。展示用。
     #[serde(default)]
     pub captured_session_id: String,
-    /// 上面这个 session_id 最近一次吸取/轮换的时间。
+    /// 上面这些 session 最近一次轮换的时间。
     #[serde(default)]
     pub captured_session_at: Option<DateTime<Utc>>,
     /// 重新吸取版本坐标的周期(天)；0=永久(只吸一次)。
@@ -256,10 +256,17 @@ impl Account {
         }
     }
 
-    /// 是否启用 session_id 归一化轮换吸取(账号级开关，仅 normalize+CC 下有意义)。
-    /// 默认开:只有显式 "off" 才关闭(空串/未设置/"rotate" 均视为开)。
-    pub fn session_rotate_enabled(&self) -> bool {
-        self.session_mode != "off"
+    /// session_id 归一化的「虚拟 session 槽数」(账号级,仅 normalize+CC 下有意义):
+    /// - "off"            → None(不归并,session_id 原样透传)
+    /// - "single"         → Some(1)(所有并发会话全部坍缩成 1 个)
+    /// - "" / "pool" / 其它 → Some(3~4)(默认:3-4 槽位池,按账号错开;像几个窗口的重度真人)
+    /// 返回 None 表示该账号不做 session 归一化。
+    pub fn session_pool_size(&self) -> Option<usize> {
+        match self.session_mode.as_str() {
+            "off" => None,
+            "single" => Some(1),
+            _ => Some(3 + (self.id.unsigned_abs() % 2) as usize), // 默认 3 或 4
+        }
     }
 
     /// 该账号是否放行某客户端类型分组(cli/vscode/sdk/desktop/other)。空配置=全部放行。
