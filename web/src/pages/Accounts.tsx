@@ -164,6 +164,7 @@ export default function Accounts() {
         u.session_mode = form.session_mode;
         u.device_quota = Math.max(0, Number(form.device_quota) || 0);
         u.session_quota = Math.max(0, Number(form.session_quota) || 0);
+        u.warmup_skip = form.warmup_skip;
         u.recapture_days = Number(form.recapture_days) || 0;
         u.max_sessions = Math.max(0, Number(form.max_sessions) || 0);
         u.allowed_client_types = form.allowed_client_types.join(',');
@@ -185,6 +186,7 @@ export default function Accounts() {
           session_mode: form.session_mode,
           device_quota: Math.max(0, Number(form.device_quota) || 0),
           session_quota: Math.max(0, Number(form.session_quota) || 0),
+          warmup_skip: form.warmup_skip,
           recapture_days: Number(form.recapture_days) || 0,
           max_sessions: Math.max(0, Number(form.max_sessions) || 0),
           allowed_client_types: form.allowed_client_types.join(','),

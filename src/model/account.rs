@@ -218,6 +218,10 @@ pub struct Account {
     /// 到下一窗口清零重置。默认 20;<=0 不限。与瞬时并发上限 max_sessions 叠加(双层保护)。
     #[serde(default = "default_session_quota")]
     pub session_quota: i32,
+    /// 是否跳过全局「新号升温」(默认 false=参与升温;外部已养好的老号可设 true,
+    /// 不受按年龄收紧的并发会话限制,直接按自身 max_sessions 跑)。
+    #[serde(default)]
+    pub warmup_skip: bool,
     /// 版本坐标(CC 版本/package/runtime)从首个真实请求吸取的时间；None=尚未吸取。
     #[serde(default)]
     pub identity_captured_at: Option<DateTime<Utc>>,

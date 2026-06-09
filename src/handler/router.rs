@@ -231,6 +231,7 @@ struct CreateAccountRequest {
     session_mode: Option<String>,
     device_quota: Option<i32>,
     session_quota: Option<i32>,
+    warmup_skip: Option<bool>,
     recapture_days: Option<i64>,
     max_sessions: Option<i32>,
     allowed_client_types: Option<String>,
@@ -290,6 +291,7 @@ async fn create_account(
         session_mode: req.session_mode.unwrap_or_default(),
         device_quota: req.device_quota.unwrap_or(10),
         session_quota: req.session_quota.unwrap_or(20),
+        warmup_skip: req.warmup_skip.unwrap_or(false),
         identity_captured_at: None,
         captured_session_id: String::new(),
         captured_session_at: None,
@@ -387,6 +389,9 @@ async fn update_account(
     }
     if let Some(v) = updates.get("session_quota").and_then(|v| v.as_i64()) {
         existing.session_quota = v as i32;
+    }
+    if let Some(v) = updates.get("warmup_skip").and_then(|v| v.as_bool()) {
+        existing.warmup_skip = v;
     }
     if let Some(v) = updates.get("recapture_days").and_then(|v| v.as_i64()) {
         existing.recapture_days = v.max(0);

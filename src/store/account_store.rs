@@ -124,6 +124,7 @@ impl AccountStore {
             session_mode: row.try_get::<String, _>("session_mode").unwrap_or_default(),
             device_quota: row.try_get::<i32, _>("device_quota").unwrap_or(10),
             session_quota: row.try_get::<i32, _>("session_quota").unwrap_or(20),
+            warmup_skip: row.try_get::<i32, _>("warmup_skip").unwrap_or(0) != 0,
             identity_captured_at: Self::parse_optional_time(row, "identity_captured_at"),
             captured_session_id: row
                 .try_get::<String, _>("captured_session_id")
@@ -178,8 +179,8 @@ impl AccountStore {
                 concurrency, priority, auto_telemetry, rpm_limit,
                 identity_mode, virtual_user, virtual_git_name, recapture_days, max_sessions,
                 allowed_client_types, window_5h_cost_cap_usd, path_mode, session_mode,
-                device_quota, session_quota)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
+                device_quota, session_quota, warmup_skip)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,{},{},{},$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
             RETURNING id, created_at, updated_at"#,
             self.ts(9), self.ts(10), "$11"
         );
@@ -218,6 +219,7 @@ impl AccountStore {
         .bind(&a.session_mode)
         .bind(a.device_quota)
         .bind(a.session_quota)
+        .bind(if a.warmup_skip { 1i32 } else { 0 })
         .fetch_one(&self.pool)
         .await?;
 
@@ -241,8 +243,8 @@ impl AccountStore {
                 concurrency=$16, priority=$17, auto_telemetry=$18, rpm_limit=$19,
                 identity_mode=$20, virtual_user=$21, virtual_git_name=$22, recapture_days=$23,
                 max_sessions=$24, allowed_client_types=$25, window_5h_cost_cap_usd=$26, path_mode=$27,
-                session_mode=$28, device_quota=$29, session_quota=$30, updated_at={}
-            WHERE id=$31"#,
+                session_mode=$28, device_quota=$29, session_quota=$30, warmup_skip=$31, updated_at={}
+            WHERE id=$32"#,
             self.ts(8), self.ts(9), self.now_expr()
         );
         sqlx::query(&q)
@@ -276,6 +278,7 @@ impl AccountStore {
             .bind(&a.session_mode)
             .bind(a.device_quota)
             .bind(a.session_quota)
+            .bind(if a.warmup_skip { 1i32 } else { 0 })
             .bind(a.id)
             .execute(&self.pool)
             .await?;
@@ -661,7 +664,7 @@ const ACCOUNT_COLS: &str = r#"id, name, email, status, token, auth_type, access_
     usage_data, usage_fetched_at, identity_mode, virtual_user, virtual_git_name,
     identity_captured_at, recapture_days, max_sessions, allowed_client_types,
     window_5h_cost_cap_usd, path_mode, captured_session_id, captured_session_at, session_mode,
-    device_quota, session_quota,
+    device_quota, session_quota, warmup_skip,
     created_at, updated_at"#;
 
 #[cfg(test)]

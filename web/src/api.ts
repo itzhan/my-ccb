@@ -75,6 +75,7 @@ export interface Account {
   session_mode?: string
   device_quota?: number
   session_quota?: number
+  warmup_skip?: boolean
   recapture_days?: number
   identity_captured_at?: string | null
   captured_session_id?: string

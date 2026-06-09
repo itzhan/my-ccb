@@ -171,6 +171,19 @@ export function AccountFormDialog({
             </div>
           </div>
           <p className="-mt-1 text-[11px] text-muted-foreground">每个 24h 固定窗口内,该账号最多承接这么多个不同设备 / 不同会话;超过则新设备/会话改选别的号(此号本窗口被限),每天北京时间 0 点整体清零重置(固定窗口、非滑动)。已绑定的会话仍继续命中原号。发往上游的设备 id 仍是模拟值。默认 10 / 20。</p>
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2">
+            <div>
+              <Label className="text-xs">参与全局「新号升温」</Label>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">默认开:按账号年龄自动收紧并发会话(新号期更严)。外部已养好的老号可关掉,直接按 max_sessions 跑。</p>
+            </div>
+            <button
+              type="button" role="switch" aria-checked={!form.warmup_skip}
+              onClick={() => patch({ warmup_skip: !form.warmup_skip })}
+              className={cn('relative h-6 w-11 shrink-0 rounded-full transition-colors', !form.warmup_skip ? 'bg-emerald-500' : 'bg-neutral-300')}
+            >
+              <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all', !form.warmup_skip ? 'left-[22px]' : 'left-0.5')} />
+            </button>
+          </div>
 
           <div className="flex gap-4">
             <div className="flex-1 space-y-2">

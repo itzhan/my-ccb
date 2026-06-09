@@ -495,8 +495,13 @@ impl AccountService {
                 let warm = self.warmup_config();
                 for acc in &ranked {
                     // 升温后的有效并发上限 = min(账号自身 max_sessions, 该年龄档位上限)。
-                    let eff_max =
-                        warm_effective_max(acc.max_sessions, warm.cap_for_age(Self::account_age_hours(acc)));
+                    // 账号勾选「跳过升温」则不收紧(warm_cap=0=不限),直接按自身 max_sessions 跑。
+                    let warm_cap = if acc.warmup_skip {
+                        0
+                    } else {
+                        warm.cap_for_age(Self::account_age_hours(acc))
+                    };
+                    let eff_max = warm_effective_max(acc.max_sessions, warm_cap);
                     // 新会话:先过(升温后的)瞬时并发上限,再过 24h 总量配额(设备≤device_quota、
                     // 会话≤session_quota)。两者都过才占号;满的号本轮跳过,改选别的号。
                     if self
