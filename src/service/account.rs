@@ -84,14 +84,110 @@ pub enum RateLimitClassification {
     NotRealRateLimit,
 }
 
+/// 新号「升温」配置:按账号年龄(自 created_at 起的小时数)动态限制最大并发会话数。
+/// 摸索自封号数据:前期(新号信任期)并发会话必须低,熬过后才能放开,否则秒封。
+#[derive(Clone, Debug, Default)]
+pub struct WarmupConfig {
+    pub enabled: bool,
+    /// 升序排列的 (年龄上限h, 该区间最大并发会话);超出最后一档 → 不限(0)。
+    pub tiers: Vec<(f64, i32)>,
+}
+
+impl WarmupConfig {
+    /// 默认曲线(取自存活账号 #9/#17 的安全升温节奏):
+    /// 0-2h≤2、2-12h≤3、12-24h≤5、>24h 放开。
+    pub fn default_tiers() -> Vec<(f64, i32)> {
+        vec![(2.0, 2), (12.0, 3), (24.0, 5)]
+    }
+
+    pub fn load(enabled: Option<String>, schedule: Option<String>) -> Self {
+        let enabled = enabled.map(|v| v == "on").unwrap_or(true);
+        let tiers = schedule
+            .and_then(|s| Self::parse(&s))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(Self::default_tiers);
+        Self { enabled, tiers }
+    }
+
+    /// 解析 JSON: [{"h":2,"max":2},...]
+    pub fn parse(json: &str) -> Option<Vec<(f64, i32)>> {
+        let v: serde_json::Value = serde_json::from_str(json).ok()?;
+        let mut t: Vec<(f64, i32)> = v
+            .as_array()?
+            .iter()
+            .filter_map(|e| {
+                let h = e.get("h").and_then(|x| x.as_f64())?;
+                let m = e.get("max").and_then(|x| x.as_i64())? as i32;
+                Some((h, m))
+            })
+            .collect();
+        t.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        Some(t)
+    }
+
+    pub fn to_json(&self) -> String {
+        let arr: Vec<_> = self
+            .tiers
+            .iter()
+            .map(|(h, m)| serde_json::json!({"h": h, "max": m}))
+            .collect();
+        serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// 给定账号年龄(小时),返回该档位的最大并发会话上限;0=不限(已毕业/未启用)。
+    pub fn cap_for_age(&self, age_hours: f64) -> i32 {
+        if !self.enabled {
+            return 0;
+        }
+        for (until, max) in &self.tiers {
+            if age_hours < *until {
+                return *max;
+            }
+        }
+        0
+    }
+}
+
+/// 合并账号自身 max_sessions 与升温上限,取更紧的(0 表示不限)。
+fn warm_effective_max(account_max: i32, warm_cap: i32) -> i32 {
+    match (account_max, warm_cap) {
+        (0, w) => w,
+        (a, 0) => a,
+        (a, w) => a.min(w),
+    }
+}
+
 pub struct AccountService {
     store: Arc<AccountStore>,
     cache: Arc<dyn CacheStore>,
+    /// 新号升温配置(运行时可改,与设置页共享)。
+    warmup: Arc<std::sync::RwLock<WarmupConfig>>,
 }
 
 impl AccountService {
-    pub fn new(store: Arc<AccountStore>, cache: Arc<dyn CacheStore>) -> Self {
-        Self { store, cache }
+    pub fn new(
+        store: Arc<AccountStore>,
+        cache: Arc<dyn CacheStore>,
+        warmup: Arc<std::sync::RwLock<WarmupConfig>>,
+    ) -> Self {
+        Self { store, cache, warmup }
+    }
+
+    /// 读取当前升温配置快照。
+    pub fn warmup_config(&self) -> WarmupConfig {
+        self.warmup.read().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// 更新升温配置(设置页调用)。
+    pub fn set_warmup(&self, cfg: WarmupConfig) {
+        if let Ok(mut g) = self.warmup.write() {
+            *g = cfg;
+        }
+    }
+
+    /// 账号年龄(自 created_at 起的小时数)。
+    fn account_age_hours(account: &Account) -> f64 {
+        (Utc::now() - account.created_at).num_seconds().max(0) as f64 / 3600.0
     }
 
     /// 创建新账号并自动生成身份信息。
@@ -395,12 +491,17 @@ impl AccountService {
                 let cands = if !primary.is_empty() { primary } else { fallback };
                 // 与 select_account 统一:优先级数值小者优先,同优先级选会话最空的号。
                 let ranked = self.rank_candidates(cands).await;
+                // 新号升温:按账号年龄动态收紧并发会话上限(快照一次)。
+                let warm = self.warmup_config();
                 for acc in &ranked {
-                    // 新会话:先过瞬时并发上限(max_sessions),再过 24h 总量配额(设备≤device_quota、
-                    // 会话≤session_quota)。两者都过才占号;配额满的号本轮跳过,改选别的号。
+                    // 升温后的有效并发上限 = min(账号自身 max_sessions, 该年龄档位上限)。
+                    let eff_max =
+                        warm_effective_max(acc.max_sessions, warm.cap_for_age(Self::account_age_hours(acc)));
+                    // 新会话:先过(升温后的)瞬时并发上限,再过 24h 总量配额(设备≤device_quota、
+                    // 会话≤session_quota)。两者都过才占号;满的号本轮跳过,改选别的号。
                     if self
                         .cache
-                        .session_admit(acc.id, session_id, acc.max_sessions, SESSION_TTL, false)
+                        .session_admit(acc.id, session_id, eff_max, SESSION_TTL, false)
                         .await
                         && self
                             .cache

@@ -48,6 +48,13 @@ async fn main() {
         .unwrap_or(false);
     let thinking_repair = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(tr_init));
 
+    // 新号升温:按账号年龄动态限并发会话(优先 DB 设置,默认开 + 默认曲线)。
+    let warmup_init = service::account::WarmupConfig::load(
+        store::db::get_setting(&pool, "warmup_enabled").await,
+        store::db::get_setting(&pool, "warmup_schedule").await,
+    );
+    let warmup = std::sync::Arc::new(std::sync::RwLock::new(warmup_init));
+
     // 缓存：优先 Redis，回退内存
     let cache: Arc<dyn store::cache::CacheStore> = match &cfg.redis {
         Some(redis_cfg) => {
@@ -81,6 +88,7 @@ async fn main() {
     let account_svc = Arc::new(service::account::AccountService::new(
         account_store.clone(),
         cache.clone(),
+        warmup.clone(),
     ));
     let rewriter = Arc::new(service::rewriter::Rewriter::new());
     let telemetry_svc = Arc::new(service::telemetry::TelemetryService::new(

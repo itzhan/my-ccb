@@ -179,6 +179,13 @@ export interface OAuthExchangeResult {
   email_address: string;
 }
 
+export interface SettingsResp {
+  client_restriction: string;
+  thinking_repair?: string;
+  warmup_enabled?: string;
+  warmup_schedule?: string;
+}
+
 export const api = {
   listAccounts: (page = 1, pageSize = 12) =>
     request<PagedResult<Account>>('GET', `/admin/accounts?page=${page}&page_size=${pageSize}`),
@@ -193,9 +200,9 @@ export const api = {
   updateToken: (id: number, t: Partial<ApiToken>) => request<ApiToken>('PUT', `/admin/tokens/${id}`, t),
   deleteToken: (id: number) => request<void>('DELETE', `/admin/tokens/${id}`),
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),
-  getSettings: () => request<{ client_restriction: string; thinking_repair?: string }>('GET', '/admin/settings'),
-  updateSettings: (s: { client_restriction?: string; thinking_repair?: string }) =>
-    request<{ client_restriction: string; thinking_repair?: string }>('PUT', '/admin/settings', s),
+  getSettings: () => request<SettingsResp>('GET', '/admin/settings'),
+  updateSettings: (s: { client_restriction?: string; thinking_repair?: string; warmup_enabled?: string; warmup_schedule?: string }) =>
+    request<SettingsResp>('PUT', '/admin/settings', s),
 
   getUsageLogs: (params: { token_id?: number; account_id?: number; model?: string; result?: string; start?: string; end?: string; page?: number; page_size?: number } = {}) => {
     const qs = Object.entries(params)

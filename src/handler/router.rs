@@ -664,7 +664,13 @@ async fn get_settings(State(state): State<AppState>) -> Json<serde_json::Value> 
     } else {
         "off"
     };
-    Json(serde_json::json!({ "client_restriction": cr, "thinking_repair": tr }))
+    let warm = state.account_svc.warmup_config();
+    Json(serde_json::json!({
+        "client_restriction": cr,
+        "thinking_repair": tr,
+        "warmup_enabled": if warm.enabled { "on" } else { "off" },
+        "warmup_schedule": warm.to_json(),
+    }))
 }
 
 async fn update_settings(
@@ -689,6 +695,30 @@ async fn update_settings(
             .thinking_repair
             .store(on, std::sync::atomic::Ordering::Relaxed);
     }
+    // 新号升温:开关 + 区间表(JSON 数组)。任一字段更新即持久化 + 热更新到 AccountService。
+    {
+        let mut warm = state.account_svc.warmup_config();
+        let mut changed = false;
+        if let Some(v) = updates.get("warmup_enabled").and_then(|v| v.as_str()) {
+            warm.enabled = v == "on";
+            crate::store::db::set_setting(&state.pool, "warmup_enabled", if warm.enabled { "on" } else { "off" })
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+            changed = true;
+        }
+        if let Some(v) = updates.get("warmup_schedule").and_then(|v| v.as_str()) {
+            if let Some(tiers) = crate::service::account::WarmupConfig::parse(v) {
+                warm.tiers = tiers;
+                crate::store::db::set_setting(&state.pool, "warmup_schedule", &warm.to_json())
+                    .await
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+                changed = true;
+            }
+        }
+        if changed {
+            state.account_svc.set_warmup(warm);
+        }
+    }
     let cr = state
         .client_restriction
         .read()
@@ -702,7 +732,13 @@ async fn update_settings(
     } else {
         "off"
     };
-    Ok(Json(serde_json::json!({ "client_restriction": cr, "thinking_repair": tr })))
+    let warm = state.account_svc.warmup_config();
+    Ok(Json(serde_json::json!({
+        "client_restriction": cr,
+        "thinking_repair": tr,
+        "warmup_enabled": if warm.enabled { "on" } else { "off" },
+        "warmup_schedule": warm.to_json(),
+    })))
 }
 
 // --- Usage Logs Handlers ---

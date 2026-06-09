@@ -18,8 +18,11 @@ export default function Settings() {
   const toast = useToast();
   const [value, setValue] = useState<Restriction>('off');
   const [thinkingRepair, setThinkingRepair] = useState(false);
+  const [warmupEnabled, setWarmupEnabled] = useState(true);
+  const [warmupTiers, setWarmupTiers] = useState<{ h: number; max: number }[]>([{ h: 2, max: 2 }, { h: 12, max: 3 }, { h: 24, max: 5 }]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingWarmup, setSavingWarmup] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -27,9 +30,26 @@ export default function Settings() {
       const s = await api.getSettings();
       setValue((s.client_restriction as Restriction) || 'off');
       setThinkingRepair(s.thinking_repair === 'on');
+      setWarmupEnabled(s.warmup_enabled !== 'off');
+      try {
+        const t = JSON.parse(s.warmup_schedule || '[]');
+        if (Array.isArray(t) && t.length) setWarmupTiers(t.map((x: { h: number; max: number }) => ({ h: Number(x.h), max: Number(x.max) })));
+      } catch { /* keep default */ }
     } catch { /* ignore */ }
     setLoading(false);
   }, []);
+
+  async function saveWarmup(enabled: boolean, tiers: { h: number; max: number }[]) {
+    setSavingWarmup(true);
+    try {
+      const sorted = [...tiers].filter((t) => t.h > 0 && t.max >= 0).sort((a, b) => a.h - b.h);
+      await api.updateSettings({ warmup_enabled: enabled ? 'on' : 'off', warmup_schedule: JSON.stringify(sorted) });
+      toast('已保存，立即生效', 'success');
+    } catch (e) {
+      toast((e as Error).message || '保存失败');
+    }
+    setSavingWarmup(false);
+  }
 
   useEffect(() => { load(); }, [load]);
 
@@ -125,6 +145,52 @@ export default function Settings() {
             >
               <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all', thinkingRepair ? 'left-[22px]' : 'left-0.5')} />
             </button>
+          </div>
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-base font-medium text-neutral-900">新号升温（按账号年龄限并发会话）</h3>
+              <p className="mt-1 text-sm text-neutral-500">
+                新号信任期内并发会话过高会被秒封（实测）。开启后,程序按账号年龄(自加入起的小时数)自动收紧"最大并发会话数",熬过新号期再放开。最终生效值 = min(账号自身 max_sessions, 当前年龄档位上限)。
+              </p>
+            </div>
+            <button
+              type="button" role="switch" aria-checked={warmupEnabled} disabled={loading || savingWarmup}
+              onClick={() => { const n = !warmupEnabled; setWarmupEnabled(n); saveWarmup(n, warmupTiers); }}
+              className={cn('relative h-6 w-11 shrink-0 rounded-full transition-colors', warmupEnabled ? 'bg-indigo-500' : 'bg-neutral-300')}
+            >
+              <span className={cn('absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all', warmupEnabled ? 'left-[22px]' : 'left-0.5')} />
+            </button>
+          </div>
+
+          <div className={cn('space-y-2', !warmupEnabled && 'opacity-50 pointer-events-none')}>
+            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-xs font-medium text-neutral-500">
+              <span>账号年龄 &lt; （小时）</span>
+              <span>最大并发会话</span>
+              <span />
+            </div>
+            {warmupTiers.map((t, i) => (
+              <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
+                <input type="number" min={0} step={0.5} value={t.h}
+                  onChange={(e) => setWarmupTiers((p) => p.map((x, j) => j === i ? { ...x, h: Number(e.target.value) } : x))}
+                  className="rounded-lg border border-neutral-200 px-3 py-1.5 text-sm" />
+                <input type="number" min={0} value={t.max}
+                  onChange={(e) => setWarmupTiers((p) => p.map((x, j) => j === i ? { ...x, max: Number(e.target.value) } : x))}
+                  className="rounded-lg border border-neutral-200 px-3 py-1.5 text-sm" />
+                <button type="button" onClick={() => setWarmupTiers((p) => p.filter((_, j) => j !== i))}
+                  className="rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50">删除</button>
+              </div>
+            ))}
+            <div className="flex items-center justify-between pt-1">
+              <button type="button" onClick={() => setWarmupTiers((p) => [...p, { h: 48, max: 8 }])}
+                className="rounded-lg border border-dashed border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 hover:border-indigo-300">+ 加一档</button>
+              <Button onClick={() => saveWarmup(warmupEnabled, warmupTiers)} disabled={savingWarmup || loading}>{savingWarmup ? '保存中…' : '保存升温表'}</Button>
+            </div>
+            <p className="text-[11px] text-neutral-400">
+              示例(默认,取自存活号 #9/#17 曲线):0-2h≤2 · 2-12h≤3 · 12-24h≤5 · 超过最后一档(24h)→ 放开不限。每档"上限"填 0 = 该档不限。
+            </p>
           </div>
         </div>
       </div>
