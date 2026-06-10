@@ -49,6 +49,15 @@ RUN apt-get update && apt-get install -y ca-certificates curl unzip libstdc++6 &
     rm -rf /tmp/bun.zip /tmp/bun && \
     apt-get purge -y curl unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* && \
     bun --version
+
+# 安装指定版本的 Claude Code（供嵌入式养号引擎在容器内拉起交互式 claude；原生单文件,无需 node）
+ARG CLAUDE_VERSION=2.1.168
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_VERSION}" && \
+    ln -sf /root/.local/bin/claude /usr/local/bin/claude && \
+    /usr/local/bin/claude --version && \
+    apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=backend /app/claude-code-gateway-bin ./claude-code-gateway
