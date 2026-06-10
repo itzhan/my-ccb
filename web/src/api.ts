@@ -231,6 +231,10 @@ export const api = {
   startWarmupTask: (id: number) => request<{ status: string }>('POST', `/admin/warmup/tasks/${id}/start`),
   stopWarmupTask: (id: number) => request<{ status: string }>('POST', `/admin/warmup/tasks/${id}/stop`),
   listWarmupTokens: () => request<{ data: ApiToken[] }>('GET', '/admin/warmup/tokens'),
+  ensureWarmupTokens: (accountIds: number[]) =>
+    request<{ data: ApiToken[] }>('POST', '/admin/warmup/ensure-tokens', { account_ids: accountIds }),
+  getWarmupLogs: (page = 1, pageSize = 50) =>
+    request<PagedResult<UsageLog>>('GET', `/admin/warmup/logs?page=${page}&page_size=${pageSize}`),
   warmupQuestionsCount: () => request<{ count: number }>('GET', '/admin/warmup/questions/count'),
 
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),

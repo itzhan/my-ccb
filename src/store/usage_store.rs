@@ -198,6 +198,62 @@ pub async fn list_logs(
     Ok((out, total))
 }
 
+/// 养号日志：只取 warmup 分类令牌产生的调用明细（养号流量天然经网关记入 usage_logs）。
+pub async fn list_warmup_logs(
+    pool: &AnyPool,
+    page: i64,
+    page_size: i64,
+) -> Result<(Vec<UsageLogRow>, i64), sqlx::Error> {
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM usage_logs u JOIN api_tokens t ON u.token_id = t.id WHERE t.category = 'warmup'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    let offset = (page.max(1) - 1) * page_size;
+    let list_sql = format!(
+        "SELECT u.id, u.token_id, u.account_id, u.request_id, u.model, u.input_tokens, u.output_tokens, \
+         u.cache_creation_tokens, u.cache_read_tokens, u.cache_creation_5m_tokens, \
+         u.cache_creation_1h_tokens, u.stream, u.status_code, u.duration_ms, u.error, \
+         u.client_ip, u.user_agent, u.path, u.session_id, u.user_id, u.proxy, u.req_headers, u.resp_headers, u.created_at \
+         FROM usage_logs u JOIN api_tokens t ON u.token_id = t.id \
+         WHERE t.category = 'warmup' ORDER BY u.id DESC LIMIT {} OFFSET {}",
+        page_size, offset
+    );
+    let rows = sqlx::query(&list_sql).fetch_all(pool).await?;
+    let out = rows
+        .into_iter()
+        .map(|row| UsageLogRow {
+            id: row.try_get("id").unwrap_or(0),
+            token_id: row.try_get("token_id").unwrap_or(0),
+            account_id: row.try_get("account_id").unwrap_or(0),
+            request_id: row.try_get("request_id").unwrap_or_default(),
+            model: row.try_get("model").unwrap_or_default(),
+            input_tokens: row.try_get("input_tokens").unwrap_or(0),
+            output_tokens: row.try_get("output_tokens").unwrap_or(0),
+            cache_creation_tokens: row.try_get("cache_creation_tokens").unwrap_or(0),
+            cache_read_tokens: row.try_get("cache_read_tokens").unwrap_or(0),
+            cache_creation_5m_tokens: row.try_get("cache_creation_5m_tokens").unwrap_or(0),
+            cache_creation_1h_tokens: row.try_get("cache_creation_1h_tokens").unwrap_or(0),
+            stream: row.try_get::<i64, _>("stream").unwrap_or(0) != 0,
+            status_code: row.try_get("status_code").unwrap_or(0),
+            duration_ms: row.try_get("duration_ms").unwrap_or(0),
+            error: row.try_get("error").unwrap_or_default(),
+            client_ip: row.try_get("client_ip").unwrap_or_default(),
+            user_agent: row.try_get("user_agent").unwrap_or_default(),
+            path: row.try_get("path").unwrap_or_default(),
+            session_id: row.try_get("session_id").unwrap_or_default(),
+            user_id: row.try_get("user_id").unwrap_or_default(),
+            proxy: row.try_get("proxy").unwrap_or_default(),
+            req_headers: row.try_get("req_headers").unwrap_or_default(),
+            resp_headers: row.try_get("resp_headers").unwrap_or_default(),
+            created_at: row.try_get("created_at").unwrap_or_default(),
+        })
+        .collect();
+    Ok((out, total))
+}
+
 /// 聚合统计（读 usage_daily）。group_by: token | account | model | day | total。
 pub async fn stats(
     pool: &AnyPool,

@@ -110,6 +110,8 @@ pub fn build_router(
         .route("/admin/warmup/tasks/:id/start", post(start_warmup_task))
         .route("/admin/warmup/tasks/:id/stop", post(stop_warmup_task))
         .route("/admin/warmup/tokens", get(list_warmup_tokens))
+        .route("/admin/warmup/ensure-tokens", post(ensure_warmup_tokens))
+        .route("/admin/warmup/logs", get(get_warmup_logs))
         .route("/admin/warmup/questions", get(warmup_questions))
         .route("/admin/warmup/questions/count", get(warmup_questions_count))
         .route("/admin/dashboard", get(get_dashboard))
@@ -666,6 +668,69 @@ async fn list_warmup_tokens(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let tokens = state.token_store.list_by_category("warmup").await?;
     Ok(Json(serde_json::json!({ "data": tokens })))
+}
+
+#[derive(Deserialize)]
+struct EnsureTokensRequest {
+    account_ids: Vec<i64>,
+}
+
+/// 按账号确保养号令牌：每个账号若已存在「绑定该单账号的 warmup 令牌」则复用，
+/// 否则新建一个(令牌名 = 账号名/邮箱，分类 warmup，allowed_accounts = 该账号)。返回这些令牌。
+async fn ensure_warmup_tokens(
+    State(state): State<AppState>,
+    Json(req): Json<EnsureTokensRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let existing = state.token_store.list_by_category("warmup").await?;
+    let mut out: Vec<ApiToken> = Vec::new();
+    for acc_id in req.account_ids {
+        // 已有「恰好绑定该单账号」的养号令牌则复用
+        if let Some(t) = existing
+            .iter()
+            .find(|t| t.allowed_account_ids() == vec![acc_id])
+        {
+            out.push(t.clone());
+            continue;
+        }
+        let acc = state.account_svc.get_account(acc_id).await?;
+        let name = if !acc.name.is_empty() { acc.name.clone() } else { acc.email.clone() };
+        let mut token = ApiToken {
+            id: 0,
+            name,
+            token: api_token::generate_token(),
+            allowed_accounts: acc_id.to_string(),
+            blocked_accounts: String::new(),
+            status: api_token::ApiTokenStatus::Active,
+            category: api_token::ApiTokenCategory::Warmup,
+            concurrency: 0,
+            expires_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        state.token_store.create(&mut token).await?;
+        out.push(token);
+    }
+    Ok(Json(serde_json::json!({ "data": out })))
+}
+
+/// 养号日志：warmup 分类令牌产生的调用明细（分页）。
+async fn get_warmup_logs(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
+    let (rows, total) = crate::store::usage_store::list_warmup_logs(&state.pool, page, page_size)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let total_pages = if page_size > 0 { (total + page_size - 1) / page_size } else { 0 };
+    Ok(Json(serde_json::json!({
+        "data": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    })))
 }
 
 async fn warmup_questions_count(State(state): State<AppState>) -> Json<serde_json::Value> {

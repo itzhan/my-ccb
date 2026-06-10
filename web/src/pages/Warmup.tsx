@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Plus, Flame, Play, Square } from 'lucide-react';
-import { api, type WarmupTask, type ApiToken } from '@/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Plus, Flame, Play, Square, ScrollText } from 'lucide-react';
+import { api, type WarmupTask, type ApiToken, type Account, type UsageLog } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { usePolling } from '@/hooks/usePolling';
 import { cn } from '@/lib/utils';
@@ -12,10 +12,10 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { BlurFade } from '@/components/magic/blur-fade';
 
-// 表单内时长用分钟,间隔用秒,提交时换算为秒。
+// 表单内时长用分钟,间隔用秒;account_ids 为逗号分隔的账号 ID(保存时换算为养号令牌)。
 interface TaskForm {
   name: string;
-  token_ids: string;
+  account_ids: string;
   msg_interval_secs: number;
   total_min: number;
   work_min: number;
@@ -24,7 +24,7 @@ interface TaskForm {
   model: string;
 }
 const emptyForm = (): TaskForm => ({
-  name: '', token_ids: '', msg_interval_secs: 60, total_min: 60, work_min: 0, rest_min: 0, jitter_pct: 20, model: '',
+  name: '', account_ids: '', msg_interval_secs: 60, total_min: 60, work_min: 0, rest_min: 0, jitter_pct: 20, model: '',
 });
 
 const STATUS_META: Record<string, { label: string; cls: string; dot: string }> = {
@@ -46,33 +46,54 @@ export default function Warmup() {
   const toast = useToast();
   const [tasks, setTasks] = useState<WarmupTask[]>([]);
   const [tokens, setTokens] = useState<ApiToken[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [logs, setLogs] = useState<UsageLog[]>([]);
   const [qCount, setQCount] = useState<number>(0);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<WarmupTask | null>(null);
   const [form, setForm] = useState<TaskForm>(emptyForm());
+  const [saving, setSaving] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
+  // 账号 id -> 名称
+  const accName = useCallback((id: number) => {
+    const a = accounts.find((x) => x.id === id);
+    return a ? (a.name || a.email) : `#${id}`;
+  }, [accounts]);
+  // 养号令牌 id -> 绑定的账号 id
+  const tokenToAccount = useCallback((tokenId: number): number | null => {
+    const t = tokens.find((x) => x.id === tokenId);
+    if (!t || !t.allowed_accounts) return null;
+    const first = t.allowed_accounts.split(',')[0]?.trim();
+    return first ? Number(first) : null;
+  }, [tokens]);
+
   const load = useCallback(async () => {
     try { setTasks((await api.listWarmupTasks()).data ?? []); } catch { /* ignore */ }
+    try { setLogs((await api.getWarmupLogs(1, 50)).data ?? []); } catch { /* ignore */ }
   }, []);
-  const loadTokens = useCallback(async () => {
+  const loadRefs = useCallback(async () => {
     try { setTokens((await api.listWarmupTokens()).data ?? []); } catch { setTokens([]); }
+    try { setAccounts((await api.listAccounts(1, 100)).data ?? []); } catch { setAccounts([]); }
   }, []);
   useEffect(() => {
-    loadTokens();
+    loadRefs();
     api.warmupQuestionsCount().then((r) => setQCount(r.count)).catch(() => {});
-  }, [loadTokens]);
+  }, [loadRefs]);
   usePolling(load, 5000);
 
   const patch = (p: Partial<TaskForm>) => setForm((f) => ({ ...f, ...p }));
 
-  function openCreate() { setEditing(null); setForm(emptyForm()); loadTokens(); setShowForm(true); }
+  function openCreate() { setEditing(null); setForm(emptyForm()); loadRefs(); setShowForm(true); }
   function openEdit(t: WarmupTask) {
     setEditing(t);
+    // token_ids -> account_ids
+    const accIds = t.token_ids.split(',').map((s) => s.trim()).filter(Boolean)
+      .map((id) => tokenToAccount(Number(id))).filter((x): x is number => x !== null);
     setForm({
       name: t.name,
-      token_ids: t.token_ids,
+      account_ids: accIds.join(','),
       msg_interval_secs: t.msg_interval_secs,
       total_min: Math.round(t.total_duration_secs / 60),
       work_min: Math.round(t.work_duration_secs / 60),
@@ -80,16 +101,21 @@ export default function Warmup() {
       jitter_pct: t.jitter_pct,
       model: t.model,
     });
-    loadTokens();
+    loadRefs();
     setShowForm(true);
   }
 
   async function save() {
-    if (!form.token_ids) { toast('请至少选择一个养号令牌'); return; }
+    const accIds = form.account_ids.split(',').map((s) => Number(s.trim())).filter((n) => n > 0);
+    if (accIds.length === 0) { toast('请至少选择一个账号'); return; }
+    setSaving(true);
     try {
+      // 为选中的账号确保养号令牌(已存在则复用),拿到 token_ids
+      const ensured = (await api.ensureWarmupTokens(accIds)).data ?? [];
+      const tokenIds = ensured.map((t) => t.id).join(',');
       const payload = {
         name: form.name,
-        token_ids: form.token_ids,
+        token_ids: tokenIds,
         msg_interval_secs: Number(form.msg_interval_secs) || 60,
         total_duration_secs: (Number(form.total_min) || 60) * 60,
         work_duration_secs: (Number(form.work_min) || 0) * 60,
@@ -100,8 +126,10 @@ export default function Warmup() {
       if (editing) await api.updateWarmupTask(editing.id, payload);
       else await api.createWarmupTask(payload);
       setShowForm(false);
+      await loadRefs();
       await load();
     } catch (e) { toast((e as Error).message || '保存失败'); }
+    finally { setSaving(false); }
   }
 
   async function start(t: WarmupTask) {
@@ -116,29 +144,30 @@ export default function Warmup() {
     catch (e) { toast((e as Error).message || '删除失败'); }
   }
 
-  function toggleToken(id: number) {
-    const ids = form.token_ids.split(',').map((s) => s.trim()).filter(Boolean);
+  function toggleAccount(id: number) {
+    const ids = form.account_ids.split(',').map((s) => s.trim()).filter(Boolean);
     const i = ids.indexOf(String(id));
     if (i >= 0) ids.splice(i, 1); else ids.push(String(id));
-    patch({ token_ids: ids.join(',') });
+    patch({ account_ids: ids.join(',') });
   }
-  function isSelected(id: number) {
-    return form.token_ids.split(',').map((s) => s.trim()).includes(String(id));
+  function isAccSelected(id: number) {
+    return form.account_ids.split(',').map((s) => s.trim()).includes(String(id));
   }
-  function tokenNames(ids: string): string {
-    if (!ids) return '—';
-    return ids.split(',').map((id) => {
-      const t = tokens.find((x) => x.id === Number(id.trim()));
-      return t ? (t.name || `#${t.id}`) : `#${id.trim()}`;
-    }).join(', ');
+  function taskAccountNames(t: WarmupTask): string {
+    const ids = t.token_ids.split(',').map((s) => s.trim()).filter(Boolean)
+      .map((id) => tokenToAccount(Number(id))).filter((x): x is number => x !== null);
+    if (ids.length === 0) return '—';
+    return ids.map((id) => accName(id)).join(', ');
   }
 
+  const logCount = useMemo(() => logs.length, [logs]);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-neutral-900">自动养号</h2>
-          <p className="text-xs text-neutral-400">题库 {qCount} 题 · 每个养号令牌会启动一个常驻 Claude Code 客户端持续交互</p>
+          <p className="text-xs text-neutral-400">题库 {qCount} 题 · 选账号即自动建/复用养号令牌(令牌名=账号名),每账号一个常驻 Claude Code 持续交互</p>
         </div>
         <Button onClick={openCreate}><Plus className="h-4 w-4" /> 创建任务</Button>
       </div>
@@ -149,7 +178,7 @@ export default function Warmup() {
             <TableHeader>
               <TableRow className="bg-neutral-50/60 hover:bg-transparent">
                 <TableHead>任务</TableHead>
-                <TableHead>养号令牌</TableHead>
+                <TableHead>养号账号</TableHead>
                 <TableHead>节奏</TableHead>
                 <TableHead>已发消息</TableHead>
                 <TableHead>状态</TableHead>
@@ -171,7 +200,7 @@ export default function Warmup() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="max-w-[200px] truncate text-xs text-neutral-600" title={tokenNames(t.token_ids)}>{tokenNames(t.token_ids)}</TableCell>
+                    <TableCell className="max-w-[200px] truncate text-xs text-neutral-600" title={taskAccountNames(t)}>{taskAccountNames(t)}</TableCell>
                     <TableCell className="text-xs text-neutral-600">
                       <div>间隔 {fmtSecs(t.msg_interval_secs)} · 总 {fmtSecs(t.total_duration_secs)}</div>
                       <div className="text-neutral-400">
@@ -218,12 +247,65 @@ export default function Warmup() {
         </div>
       </BlurFade>
 
+      {/* 养号日志 */}
+      <BlurFade>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <ScrollText className="h-4 w-4 text-neutral-500" />
+            <h3 className="text-sm font-medium text-neutral-700">养号日志</h3>
+            <span className="text-xs text-neutral-400">最近 {logCount} 条养号调用(每 5 秒刷新)</span>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-neutral-50/60 hover:bg-transparent">
+                  <TableHead>时间</TableHead>
+                  <TableHead>账号</TableHead>
+                  <TableHead>模型</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead>输入/输出</TableHead>
+                  <TableHead>耗时</TableHead>
+                  <TableHead>错误</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {logs.map((l) => {
+                  const ok = l.status_code > 0 && l.status_code < 400;
+                  return (
+                    <TableRow key={l.id} className="align-top">
+                      <TableCell className="text-xs text-neutral-500 whitespace-nowrap">{new Date(l.created_at).toLocaleTimeString('zh-CN')}</TableCell>
+                      <TableCell className="max-w-[140px] truncate text-xs text-neutral-700" title={accName(l.account_id)}>{accName(l.account_id)}</TableCell>
+                      <TableCell className="text-xs text-neutral-600">{l.model || '—'}</TableCell>
+                      <TableCell>
+                        <span className={cn('rounded px-1.5 py-0.5 text-[11px]', l.status_code === 0 ? 'bg-neutral-100 text-neutral-500' : ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600')}>
+                          {l.status_code || '—'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-xs text-neutral-600 whitespace-nowrap">{l.input_tokens}/{l.output_tokens}</TableCell>
+                      <TableCell className="text-xs text-neutral-500 whitespace-nowrap">{l.duration_ms}ms</TableCell>
+                      <TableCell className="max-w-[200px] truncate text-[11px] text-red-500" title={l.error}>{l.error || ''}</TableCell>
+                    </TableRow>
+                  );
+                })}
+                {logs.length === 0 && (
+                  <TableRow className="border-0 hover:bg-transparent">
+                    <TableCell colSpan={7} className="py-10">
+                      <p className="text-center text-sm text-neutral-400">暂无养号日志(开始养号后这里会显示每次调用)</p>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      </BlurFade>
+
       {/* 新建/编辑任务 */}
       <Dialog open={showForm} onOpenChange={setShowForm}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editing ? '编辑养号任务' : '创建养号任务'}</DialogTitle>
-            <DialogDescription>选择养号令牌并设置节奏，启动后每个令牌会拉起一个 Claude Code 客户端持续提问。</DialogDescription>
+            <DialogDescription>直接选要养的账号,系统会自动为每个账号创建/复用养号令牌(令牌名=账号名)。</DialogDescription>
           </DialogHeader>
           <form onSubmit={(e) => { e.preventDefault(); save(); }} className="mt-1 space-y-4">
             <div className="space-y-2">
@@ -231,19 +313,19 @@ export default function Warmup() {
               <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} placeholder="例如：夜间批量养号" />
             </div>
             <div className="space-y-2">
-              <Label>养号令牌（必选，可多选批量养号）</Label>
-              {tokens.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {tokens.map((t) => (
-                    <button key={t.id} type="button" onClick={() => toggleToken(t.id)}
+              <Label>养号账号（必选，可多选批量养号）</Label>
+              {accounts.length > 0 ? (
+                <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
+                  {accounts.map((a) => (
+                    <button key={a.id} type="button" onClick={() => toggleAccount(a.id)}
                       className={cn('rounded-md border px-2 py-0.5 text-[10px] transition-colors',
-                        isSelected(t.id) ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-amber-300')}>
-                      #{t.id} {t.name || t.token.slice(0, 10)}{t.allowed_accounts ? ` →账号${t.allowed_accounts}` : ''}
+                        isAccSelected(a.id) ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-amber-300')}>
+                      #{a.id} {a.name || a.email}
                     </button>
                   ))}
                 </div>
               ) : (
-                <p className="text-[11px] text-neutral-400">没有养号分类的令牌。请先到「令牌」页创建分类为"养号专用"的令牌（绑定一个账号）。</p>
+                <p className="text-[11px] text-neutral-400">还没有账号。请先到「账号」页添加账号。</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -274,7 +356,7 @@ export default function Warmup() {
             </div>
             <DialogFooter className="gap-2 pt-2">
               <Button type="button" variant="ghost" onClick={() => setShowForm(false)}>取消</Button>
-              <Button type="submit">保存</Button>
+              <Button type="submit" disabled={saving}>{saving ? '保存中...' : '保存'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -285,7 +367,7 @@ export default function Warmup() {
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
-            <DialogDescription>删除任务会先停止其正在运行的养号进程，此操作不可撤销。</DialogDescription>
+            <DialogDescription>删除任务会先停止其正在运行的养号进程，此操作不可撤销。(账号对应的养号令牌会保留)</DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 pt-2">
             <Button variant="ghost" onClick={() => setShowDelete(false)}>取消</Button>
