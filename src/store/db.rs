@@ -183,6 +183,21 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await
         .ok();
+    // 令牌分类：customer（默认，客户用）/ warmup（养号专用）
+    sqlx::query("ALTER TABLE api_tokens ADD COLUMN category TEXT NOT NULL DEFAULT 'customer'")
+        .execute(pool)
+        .await
+        .ok();
+
+    // 养号任务表
+    let warmup_schema = if driver == "sqlite" { SQLITE_WARMUP_SCHEMA } else { PG_WARMUP_SCHEMA };
+    for stmt in warmup_schema.split(';') {
+        let stmt = stmt.trim();
+        if stmt.is_empty() {
+            continue;
+        }
+        sqlx::query(stmt).execute(pool).await?;
+    }
 
     // 用量记录表（调用明细 usage_logs + 每日汇总 usage_daily）
     let usage_schema = if driver == "sqlite" { SQLITE_USAGE_SCHEMA } else { PG_USAGE_SCHEMA };
@@ -304,6 +319,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     allowed_accounts    TEXT NOT NULL DEFAULT '',
     blocked_accounts    TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'active',
+    category            TEXT NOT NULL DEFAULT 'customer',
     concurrency         INTEGER NOT NULL DEFAULT 0,
     expires_at          TEXT,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
@@ -319,6 +335,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     allowed_accounts    TEXT NOT NULL DEFAULT '',
     blocked_accounts    TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'active',
+    category            TEXT NOT NULL DEFAULT 'customer',
     concurrency         INTEGER NOT NULL DEFAULT 0,
     expires_at          TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -368,6 +385,50 @@ CREATE TABLE IF NOT EXISTS usage_daily (
     req_count                INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, token_id, account_id, model)
 );
+"#;
+
+const SQLITE_WARMUP_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS warmup_tasks (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT NOT NULL DEFAULT '',
+    token_ids           TEXT NOT NULL DEFAULT '',
+    msg_interval_secs   INTEGER NOT NULL DEFAULT 60,
+    total_duration_secs INTEGER NOT NULL DEFAULT 3600,
+    work_duration_secs  INTEGER NOT NULL DEFAULT 0,
+    rest_duration_secs  INTEGER NOT NULL DEFAULT 0,
+    jitter_pct          INTEGER NOT NULL DEFAULT 20,
+    model               TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'pending',
+    error               TEXT NOT NULL DEFAULT '',
+    messages_sent       INTEGER NOT NULL DEFAULT 0,
+    started_at          TEXT,
+    ends_at             TEXT,
+    last_message_at     TEXT,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+)
+"#;
+
+const PG_WARMUP_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS warmup_tasks (
+    id                  BIGSERIAL PRIMARY KEY,
+    name                TEXT NOT NULL DEFAULT '',
+    token_ids           TEXT NOT NULL DEFAULT '',
+    msg_interval_secs   BIGINT NOT NULL DEFAULT 60,
+    total_duration_secs BIGINT NOT NULL DEFAULT 3600,
+    work_duration_secs  BIGINT NOT NULL DEFAULT 0,
+    rest_duration_secs  BIGINT NOT NULL DEFAULT 0,
+    jitter_pct          BIGINT NOT NULL DEFAULT 20,
+    model               TEXT NOT NULL DEFAULT '',
+    status              TEXT NOT NULL DEFAULT 'pending',
+    error               TEXT NOT NULL DEFAULT '',
+    messages_sent       BIGINT NOT NULL DEFAULT 0,
+    started_at          TEXT,
+    ends_at             TEXT,
+    last_message_at     TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)
 "#;
 
 const PG_USAGE_SCHEMA: &str = r#"

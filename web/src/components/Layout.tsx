@@ -21,6 +21,7 @@ const NAV = [
   { to: '/', label: '账号', end: true },
   { to: '/tokens', label: '令牌', end: false },
   { to: '/usage', label: '调用记录', end: false },
+  { to: '/warmup', label: '养号', end: false },
   { to: '/settings', label: '设置', end: false },
 ];
 

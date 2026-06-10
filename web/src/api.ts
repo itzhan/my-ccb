@@ -117,8 +117,31 @@ export interface ApiToken {
   allowed_accounts: string;
   blocked_accounts: string;
   status: string;
+  /** customer（默认，客户用）/ warmup（养号专用） */
+  category: string;
   concurrency: number;
   expires_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WarmupTask {
+  id: number;
+  name: string;
+  /** 逗号分隔的 warmup 令牌 ID */
+  token_ids: string;
+  msg_interval_secs: number;
+  total_duration_secs: number;
+  work_duration_secs: number;
+  rest_duration_secs: number;
+  jitter_pct: number;
+  model: string;
+  status: string;
+  error: string;
+  messages_sent: number;
+  started_at?: string | null;
+  ends_at?: string | null;
+  last_message_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -200,6 +223,16 @@ export const api = {
   createToken: (t: Partial<ApiToken>) => request<ApiToken>('POST', '/admin/tokens', t),
   updateToken: (id: number, t: Partial<ApiToken>) => request<ApiToken>('PUT', `/admin/tokens/${id}`, t),
   deleteToken: (id: number) => request<void>('DELETE', `/admin/tokens/${id}`),
+  // 养号
+  listWarmupTasks: () => request<{ data: WarmupTask[] }>('GET', '/admin/warmup/tasks'),
+  createWarmupTask: (t: Partial<WarmupTask>) => request<WarmupTask>('POST', '/admin/warmup/tasks', t),
+  updateWarmupTask: (id: number, t: Partial<WarmupTask>) => request<WarmupTask>('PUT', `/admin/warmup/tasks/${id}`, t),
+  deleteWarmupTask: (id: number) => request<void>('DELETE', `/admin/warmup/tasks/${id}`),
+  startWarmupTask: (id: number) => request<{ status: string }>('POST', `/admin/warmup/tasks/${id}/start`),
+  stopWarmupTask: (id: number) => request<{ status: string }>('POST', `/admin/warmup/tasks/${id}/stop`),
+  listWarmupTokens: () => request<{ data: ApiToken[] }>('GET', '/admin/warmup/tokens'),
+  warmupQuestionsCount: () => request<{ count: number }>('GET', '/admin/warmup/questions/count'),
+
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),
   getSettings: () => request<SettingsResp>('GET', '/admin/settings'),
   updateSettings: (s: { client_restriction?: string; thinking_repair?: string; warmup_enabled?: string; warmup_schedule?: string }) =>

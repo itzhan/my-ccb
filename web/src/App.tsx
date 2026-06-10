@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Accounts from './pages/Accounts';
 import Tokens from './pages/Tokens';
 import Usage from './pages/Usage';
+import Warmup from './pages/Warmup';
 import Settings from './pages/Settings';
 
 function Splash() {
@@ -27,6 +28,7 @@ export default function App() {
         <Route index element={<Accounts />} />
         <Route path="tokens" element={<Tokens />} />
         <Route path="usage" element={<Usage />} />
+        <Route path="warmup" element={<Warmup />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

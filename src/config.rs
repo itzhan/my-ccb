@@ -15,6 +15,22 @@ pub struct Config {
     pub identity_mode: String,
     /// normalize 模式下的路径处理全局默认：simulate（默认，改写真实路径用户名）/ passthrough（真实路径原样透传）。
     pub path_mode: String,
+    /// 自动养号运行时配置。
+    pub warmup: WarmupRuntime,
+}
+
+#[derive(Clone)]
+pub struct WarmupRuntime {
+    /// claude 可执行文件（默认 "claude"，需在 PATH 中）。
+    pub claude_bin: String,
+    /// 养号子进程回连的网关地址（默认 http://127.0.0.1:<port>，TLS 部署需显式设置）。
+    pub base_url: String,
+    /// 同时存活的 claude 子进程上限。
+    pub max_processes: usize,
+    /// 一轮回答的静默判定秒数（连续这么久无新输出即认为答完）。
+    pub idle_secs: u64,
+    /// 单轮回答的最大等待秒数（兜底）。
+    pub turn_timeout_secs: u64,
 }
 
 #[derive(Clone)]
@@ -72,6 +88,31 @@ impl Config {
     pub fn load() -> Self {
         dotenvy::dotenv().ok();
 
+        let server_port: u16 = env::var("SERVER_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5674);
+        let warmup = WarmupRuntime {
+            claude_bin: env::var("WARMUP_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
+            base_url: env::var("WARMUP_BASE_URL")
+                .unwrap_or_else(|_| format!("http://127.0.0.1:{}", server_port)),
+            max_processes: env::var("WARMUP_MAX_PROCESSES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&v| v > 0)
+                .unwrap_or(10),
+            idle_secs: env::var("WARMUP_IDLE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&v| v > 0)
+                .unwrap_or(4),
+            turn_timeout_secs: env::var("WARMUP_TURN_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|&v| v > 0)
+                .unwrap_or(120),
+        };
+
         let redis = env::var("REDIS_HOST").ok().map(|host| RedisConfig {
             host,
             port: env::var("REDIS_PORT")
@@ -87,10 +128,7 @@ impl Config {
 
         Config {
             server: ServerConfig {
-                port: env::var("SERVER_PORT")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(5674),
+                port: server_port,
                 host: env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
                 tls_cert: env::var("TLS_CERT_FILE").ok(),
                 tls_key: env::var("TLS_KEY_FILE").ok(),
@@ -121,6 +159,7 @@ impl Config {
             client_restriction: env::var("CLIENT_RESTRICTION").unwrap_or_else(|_| "off".into()),
             identity_mode: env::var("IDENTITY_MODE").unwrap_or_else(|_| "passthrough".into()),
             path_mode: env::var("PATH_MODE").unwrap_or_else(|_| "simulate".into()),
+            warmup,
         }
     }
 }

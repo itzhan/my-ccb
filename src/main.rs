@@ -84,6 +84,7 @@ async fn main() {
 
     let account_store = Arc::new(store::account_store::AccountStore::new(pool.clone(), driver.clone()));
     let token_store = Arc::new(store::token_store::TokenStore::new(pool.clone(), driver.clone()));
+    let warmup_store = Arc::new(store::warmup_store::WarmupStore::new(pool.clone(), driver.clone()));
 
     let account_svc = Arc::new(service::account::AccountService::new(
         account_store.clone(),
@@ -121,6 +122,17 @@ async fn main() {
     let token_tester = Arc::new(service::oauth::TokenTester::new());
     let oauth_flow_svc = Arc::new(service::oauth_flow::OAuthFlowService::new());
 
+    // 自动养号引擎:后台 supervisor 恢复 running 任务,API 触发启动/停止。
+    let warmer_svc = service::account_warmer::AccountWarmerService::new(
+        token_store.clone(),
+        warmup_store.clone(),
+        cfg.warmup.clone(),
+    );
+    tokio::spawn({
+        let svc = warmer_svc.clone();
+        async move { svc.run().await }
+    });
+
     // 后台定时拉取 OAuth 账户用量数据（已禁用：频繁查询可能导致封号，仅保留用户手动查询）
     // let usage_poller = Arc::new(service::usage_poller::UsagePollerService::new(
     //     account_svc.clone(),
@@ -139,6 +151,8 @@ async fn main() {
         token_store,
         oauth_flow_svc,
         telemetry_svc,
+        warmup_store,
+        warmer_svc,
         client_restriction,
         thinking_repair,
         pool.clone(),

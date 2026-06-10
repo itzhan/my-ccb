@@ -11,8 +11,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { BlurFade } from '@/components/magic/blur-fade';
 
-interface TokenForm { name: string; allowed_accounts: string; blocked_accounts: string; concurrency: number; expires_at: string }
-const emptyForm = (): TokenForm => ({ name: '', allowed_accounts: '', blocked_accounts: '', concurrency: 0, expires_at: '' });
+interface TokenForm { name: string; category: string; allowed_accounts: string; blocked_accounts: string; concurrency: number; expires_at: string }
+const emptyForm = (): TokenForm => ({ name: '', category: 'customer', allowed_accounts: '', blocked_accounts: '', concurrency: 0, expires_at: '' });
 
 function isoToLocalInput(iso?: string | null): string {
   if (!iso) return '';
@@ -55,7 +55,7 @@ export default function Tokens() {
   function openCreate() { setEditing(null); setForm(emptyForm()); setShowForm(true); }
   function openEdit(t: ApiToken) {
     setEditing(t);
-    setForm({ name: t.name, allowed_accounts: t.allowed_accounts, blocked_accounts: t.blocked_accounts, concurrency: t.concurrency ?? 0, expires_at: isoToLocalInput(t.expires_at) });
+    setForm({ name: t.name, category: t.category || 'customer', allowed_accounts: t.allowed_accounts, blocked_accounts: t.blocked_accounts, concurrency: t.concurrency ?? 0, expires_at: isoToLocalInput(t.expires_at) });
     setShowForm(true);
   }
 
@@ -63,6 +63,7 @@ export default function Tokens() {
     try {
       const payload = {
         name: form.name,
+        category: form.category,
         allowed_accounts: form.allowed_accounts,
         blocked_accounts: form.blocked_accounts,
         concurrency: Number(form.concurrency) || 0,
@@ -146,7 +147,12 @@ export default function Tokens() {
                     <div className="flex items-center gap-2">
                       <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"><KeyRound className="h-3.5 w-3.5" /></div>
                       <div>
-                        <p className="text-sm font-medium text-neutral-900">{t.name || '未命名令牌'}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-medium text-neutral-900">{t.name || '未命名令牌'}</p>
+                          {t.category === 'warmup' && (
+                            <Badge className="border-amber-200 bg-amber-50 text-amber-700">养号</Badge>
+                          )}
+                        </div>
                         <p className="text-xs text-neutral-400">{new Date(t.created_at).toLocaleDateString('zh-CN')}</p>
                       </div>
                     </div>
@@ -203,6 +209,21 @@ export default function Tokens() {
             <DialogDescription>{editing ? '修改令牌设置' : '创建新的 API 令牌，令牌将自动生成'}</DialogDescription>
           </DialogHeader>
           <form onSubmit={(e) => { e.preventDefault(); save(); }} className="mt-1 space-y-4">
+            <div className="space-y-2">
+              <Label>分类</Label>
+              <div className="flex gap-1.5">
+                {([['customer', '客户用'], ['warmup', '养号专用']] as const).map(([val, label]) => (
+                  <button key={val} type="button" onClick={() => patch({ category: val })}
+                    className={cn('flex-1 rounded-md border px-3 py-1.5 text-xs transition-colors',
+                      form.category === val ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-indigo-300')}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {form.category === 'warmup' && (
+                <p className="text-[11px] text-amber-600">养号令牌建议在下方"可用账号"中只选一个账号（一个 key 绑一个账号）。</p>
+              )}
+            </div>
             <div className="space-y-2">
               <Label>备注名（选填）</Label>
               <Input value={form.name} onChange={(e) => patch({ name: e.target.value })} placeholder="例如：生产环境、测试用" />

@@ -70,5 +70,8 @@ uuid = { version = "1", features = ["v4"] }
 thiserror = "1"
 rust-embed = "8"
 
+# 养号：在伪终端中驱动交互式 claude 客户端
+portable-pty = "0.8"
+
 [patch.crates-io]
 rustls = { path = "craftls/rustls" }

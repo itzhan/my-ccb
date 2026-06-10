@@ -14,12 +14,15 @@ use crate::error::AppError;
 use crate::middleware::auth::{admin_auth, extract_key};
 use crate::model::account::{Account, AccountAuthType, AccountStatus};
 use crate::model::api_token::{self, ApiToken};
+use crate::model::warmup::{WarmupStatus, WarmupTask};
 use crate::service::account::AccountService;
+use crate::service::account_warmer::AccountWarmerService;
 use crate::service::gateway::GatewayService;
 use crate::service::oauth::TokenTester;
 use crate::service::oauth_flow::OAuthFlowService;
 use crate::service::telemetry::TelemetryService;
 use crate::store::token_store::TokenStore;
+use crate::store::warmup_store::WarmupStore;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -29,6 +32,8 @@ pub struct AppState {
     pub token_store: Arc<TokenStore>,
     pub oauth_flow_svc: Arc<OAuthFlowService>,
     pub telemetry_svc: Arc<TelemetryService>,
+    pub warmup_store: Arc<WarmupStore>,
+    pub warmer_svc: Arc<AccountWarmerService>,
     pub admin_password: String,
     /// 运行时可改的客户端限制级别（与网关共享）。
     pub client_restriction: Arc<std::sync::RwLock<crate::service::client_guard::ClientRestriction>>,
@@ -46,6 +51,8 @@ pub fn build_router(
     token_store: Arc<TokenStore>,
     oauth_flow_svc: Arc<OAuthFlowService>,
     telemetry_svc: Arc<TelemetryService>,
+    warmup_store: Arc<WarmupStore>,
+    warmer_svc: Arc<AccountWarmerService>,
     client_restriction: Arc<std::sync::RwLock<crate::service::client_guard::ClientRestriction>>,
     thinking_repair: Arc<std::sync::atomic::AtomicBool>,
     pool: sqlx::AnyPool,
@@ -57,6 +64,8 @@ pub fn build_router(
         token_store,
         oauth_flow_svc,
         telemetry_svc,
+        warmup_store,
+        warmer_svc,
         admin_password: cfg.admin.password.clone(),
         client_restriction,
         thinking_repair,
@@ -71,6 +80,7 @@ pub fn build_router(
         .route("/login", get(spa_handler))
         .route("/tokens", get(spa_handler))
         .route("/usage", get(spa_handler))
+        .route("/warmup", get(spa_handler))
         .route("/settings", get(spa_handler));
 
     // 前端静态资源
@@ -92,6 +102,16 @@ pub fn build_router(
             "/admin/tokens/:id",
             put(update_token).delete(delete_token_handler),
         )
+        .route("/admin/warmup/tasks", get(list_warmup_tasks).post(create_warmup_task))
+        .route(
+            "/admin/warmup/tasks/:id",
+            put(update_warmup_task).delete(delete_warmup_task),
+        )
+        .route("/admin/warmup/tasks/:id/start", post(start_warmup_task))
+        .route("/admin/warmup/tasks/:id/stop", post(stop_warmup_task))
+        .route("/admin/warmup/tokens", get(list_warmup_tokens))
+        .route("/admin/warmup/questions", get(warmup_questions))
+        .route("/admin/warmup/questions/count", get(warmup_questions_count))
         .route("/admin/dashboard", get(get_dashboard))
         .route("/admin/settings", get(get_settings).put(update_settings))
         .route("/admin/usage/logs", get(get_usage_logs).delete(delete_usage_logs))
@@ -545,6 +565,8 @@ struct CreateTokenRequest {
     name: Option<String>,
     allowed_accounts: Option<String>,
     blocked_accounts: Option<String>,
+    /// customer（默认）/ warmup（养号专用）。
+    category: Option<String>,
     concurrency: Option<i32>,
     /// RFC3339 时间字符串，留空表示永不过期。
     expires_at: Option<String>,
@@ -561,6 +583,7 @@ async fn create_token(
         allowed_accounts: req.allowed_accounts.unwrap_or_default(),
         blocked_accounts: req.blocked_accounts.unwrap_or_default(),
         status: api_token::ApiTokenStatus::Active,
+        category: req.category.unwrap_or_else(|| "customer".into()).into(),
         concurrency: req.concurrency.unwrap_or(0).max(0),
         expires_at: parse_expires_at(req.expires_at.as_deref()),
         created_at: chrono::Utc::now(),
@@ -594,6 +617,11 @@ async fn update_token(
     if let Some(blocked) = updates.get("blocked_accounts").and_then(|v| v.as_str()) {
         existing.blocked_accounts = blocked.to_string();
     }
+    if let Some(category) = updates.get("category").and_then(|v| v.as_str()) {
+        if !category.is_empty() {
+            existing.category = category.to_string().into();
+        }
+    }
     if let Some(status) = updates.get("status").and_then(|v| v.as_str()) {
         if !status.is_empty() {
             existing.status = status.to_string().into();
@@ -621,6 +649,133 @@ async fn delete_token_handler(
 ) -> Result<Json<serde_json::Value>, AppError> {
     state.token_store.delete(id).await?;
     Ok(Json(serde_json::json!({"status": "deleted"})))
+}
+
+// --- Warmup (养号) Handlers ---
+
+async fn list_warmup_tasks(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let tasks = state.warmup_store.list().await?;
+    Ok(Json(serde_json::json!({ "data": tasks })))
+}
+
+/// 列出所有 warmup 分类的令牌（养号任务选择对象）。
+async fn list_warmup_tokens(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let tokens = state.token_store.list_by_category("warmup").await?;
+    Ok(Json(serde_json::json!({ "data": tokens })))
+}
+
+async fn warmup_questions_count(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "count": state.warmer_svc.questions_count() }))
+}
+
+/// 完整题库(供独立本地运行器拉取，只需 url + admin-key 即可获取)。
+async fn warmup_questions(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "data": &*state.warmer_svc.questions_arc() }))
+}
+
+#[derive(Deserialize)]
+struct CreateWarmupTaskRequest {
+    name: Option<String>,
+    token_ids: Option<String>,
+    msg_interval_secs: Option<i64>,
+    total_duration_secs: Option<i64>,
+    work_duration_secs: Option<i64>,
+    rest_duration_secs: Option<i64>,
+    jitter_pct: Option<i64>,
+    model: Option<String>,
+}
+
+async fn create_warmup_task(
+    State(state): State<AppState>,
+    Json(req): Json<CreateWarmupTaskRequest>,
+) -> Result<(StatusCode, Json<WarmupTask>), AppError> {
+    let mut task = WarmupTask {
+        id: 0,
+        name: req.name.unwrap_or_default(),
+        token_ids: req.token_ids.unwrap_or_default(),
+        msg_interval_secs: req.msg_interval_secs.unwrap_or(60).max(1),
+        total_duration_secs: req.total_duration_secs.unwrap_or(3600).max(1),
+        work_duration_secs: req.work_duration_secs.unwrap_or(0).max(0),
+        rest_duration_secs: req.rest_duration_secs.unwrap_or(0).max(0),
+        jitter_pct: req.jitter_pct.unwrap_or(20).clamp(0, 100),
+        model: req.model.unwrap_or_default(),
+        status: WarmupStatus::Pending,
+        error: String::new(),
+        messages_sent: 0,
+        started_at: None,
+        ends_at: None,
+        last_message_at: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    state.warmup_store.create(&mut task).await?;
+    Ok((StatusCode::CREATED, Json(task)))
+}
+
+async fn update_warmup_task(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(updates): Json<serde_json::Value>,
+) -> Result<Json<WarmupTask>, AppError> {
+    let mut existing = state.warmup_store.get_by_id(id).await?;
+    if existing.status == WarmupStatus::Running {
+        return Err(AppError::BadRequest("任务运行中，请先停止再编辑".into()));
+    }
+    if let Some(v) = updates.get("name").and_then(|v| v.as_str()) {
+        existing.name = v.to_string();
+    }
+    if let Some(v) = updates.get("token_ids").and_then(|v| v.as_str()) {
+        existing.token_ids = v.to_string();
+    }
+    if let Some(v) = updates.get("msg_interval_secs").and_then(|v| v.as_i64()) {
+        existing.msg_interval_secs = v.max(1);
+    }
+    if let Some(v) = updates.get("total_duration_secs").and_then(|v| v.as_i64()) {
+        existing.total_duration_secs = v.max(1);
+    }
+    if let Some(v) = updates.get("work_duration_secs").and_then(|v| v.as_i64()) {
+        existing.work_duration_secs = v.max(0);
+    }
+    if let Some(v) = updates.get("rest_duration_secs").and_then(|v| v.as_i64()) {
+        existing.rest_duration_secs = v.max(0);
+    }
+    if let Some(v) = updates.get("jitter_pct").and_then(|v| v.as_i64()) {
+        existing.jitter_pct = v.clamp(0, 100);
+    }
+    if let Some(v) = updates.get("model").and_then(|v| v.as_str()) {
+        existing.model = v.to_string();
+    }
+    state.warmup_store.update(&existing).await?;
+    Ok(Json(existing))
+}
+
+async fn delete_warmup_task(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state.warmer_svc.stop_task(id).await.ok();
+    state.warmup_store.delete(id).await?;
+    Ok(Json(serde_json::json!({"status": "deleted"})))
+}
+
+async fn start_warmup_task(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state.warmer_svc.start_task(id).await?;
+    Ok(Json(serde_json::json!({"status": "running"})))
+}
+
+async fn stop_warmup_task(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state.warmer_svc.stop_task(id).await?;
+    Ok(Json(serde_json::json!({"status": "stopped"})))
 }
 
 // --- Dashboard ---

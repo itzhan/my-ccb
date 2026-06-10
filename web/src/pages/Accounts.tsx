@@ -403,9 +403,7 @@ export default function Accounts() {
                       <div className="max-w-[150px] space-y-0.5 text-[11px]">
                         <p className={cn('truncate', a.identity_mode === 'normalize' ? 'text-emerald-600' : 'text-neutral-500')}>
                           {a.identity_mode === 'normalize' ? '归一化' : '透传'}
-                          {a.identity_mode === 'normalize' && (a.identity_captured_at
-                            ? <span className="text-neutral-400"> v{String(a.canonical_env?.version ?? '')}</span>
-                            : <span className="text-amber-600"> 待吸取</span>)}
+                          {a.identity_mode === 'normalize' && <span className="text-neutral-400"> v2.1.168 固定</span>}
                         </p>
                         {a.identity_mode === 'normalize' && (() => {
                           const sids = (a.captured_session_id || '').split(',').filter(Boolean);

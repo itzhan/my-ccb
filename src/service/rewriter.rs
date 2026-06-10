@@ -59,7 +59,7 @@ pub enum ClientType {
     API,
 }
 
-const DEFAULT_VERSION: &str = "2.1.156";
+const DEFAULT_VERSION: &str = "2.1.168";
 /// 与 DEFAULT_VERSION 对应的 Anthropic SDK 版本（x-stainless-package-version）。
 const STAINLESS_PACKAGE_VERSION: &str = "0.94.0";
 const DEFAULT_RUNTIME_VERSION: &str = "v24.3.0";
@@ -114,22 +114,12 @@ fn beta_header_for_model(model_id: &str) -> &'static str {
     // 取自真实 Claude Code 2.1.156 抓包（POST /v1/messages?beta=true）。
     // 注意：真实 CC 不发送 oauth-2025-04-20。
     let lower = model_id.to_lowercase();
+    // 取自真实 Claude Code 2.1.168 抓包(ANTHROPIC_BASE_URL 日志)。与上面 DEFAULT_VERSION 同源,
+    // 保证 UA 版本与 beta 集合自洽(都是 2.1.168 的真实样子,不再硬编码混版本)。
     if lower.contains("haiku") {
-        // haiku 辅助请求用较小集合（不含 1M 上下文等重特性）。
-        // 但「字段门控类」beta 必须与主集合保持一致 —— 新版 CC 会按进程级在 body 里带
-        // diagnostics / context_management 等顶层字段,haiku 辅助请求也可能带;normalize 覆盖
-        // 客户端 anthropic-beta 后若缺对应开关,上游会 400「<field>: Extra inputs are not permitted」。
-        // context-management-2025-06-27：门控 body 顶层 context_management 字段。
-        // cache-diagnosis-2026-04-07：门控 body 顶层 diagnostics 字段。
-        "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,cache-diagnosis-2026-04-07"
+        "prompt-caching-scope-2026-01-05,claude-code-20250219,advisor-tool-2026-03-01"
     } else {
-        // 去掉 context-1m-2025-08-07：1M 长上下文是计费功能,订阅号无额度会 429
-        // "Usage credits are required for long context requests"。去掉后 CC 视窗口为 20 万,
-        // 长对话自动压缩、不再卡死(与 sub2api 模板一致)。
-        // cache-diagnosis-2026-04-07：新版 CC 会在 body 里带顶层 diagnostics 字段,该字段由此
-        // beta 开关 gate;normalize 模式会用本列表覆盖客户端 anthropic-beta,若不带此开关,
-        // 上游会拒绝 "diagnostics: Extra inputs are not permitted"(400)。
-        "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,cache-diagnosis-2026-04-07"
+        "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24"
     }
 }
 
@@ -153,11 +143,8 @@ impl Rewriter {
         body_map: &serde_json::Value,
     ) -> HashMap<String, String> {
         let env = self.parse_env(account);
-        let version = if env.version.is_empty() {
-            DEFAULT_VERSION
-        } else {
-            &env.version
-        };
+        // 版本固定到当前真实 CC 版本(不再按账号吸取/预设),保证全号一致、与 beta 自洽。
+        let version = DEFAULT_VERSION;
 
         let mut out = HashMap::new();
 
@@ -499,24 +486,17 @@ impl Rewriter {
         headers: &mut [(String, String)],
         account: &Account,
         model: &str,
-        captured: Option<&CapturedCoords>,
+        _captured: Option<&CapturedCoords>,
     ) {
         let env = self.parse_env(account);
         let os = stainless_os_from_platform(&env.platform);
-        // 版本三项:优先【账号吸取并存下的固定版本】→ 本次请求 → 全局默认。
-        // 这样同一个 normalize 号不管被哪个 CLI 版本的客户端打,上游永远只看到一个稳定版本,
-        // 消除"同一设备版本横跳"的多人共号封号信号。env.version 由首个请求 persist 吸取写入。
-        let (cap_v, cap_p, cap_r) = match captured {
-            Some(c) => (
-                c.cc_version.as_str(),
-                c.package_version.as_str(),
-                c.runtime_version.as_str(),
-            ),
-            None => ("", "", ""),
-        };
-        let version = pick3(&env.version, cap_v, DEFAULT_VERSION);
-        let package_version = pick3(&env.package_version, cap_p, STAINLESS_PACKAGE_VERSION);
-        let runtime_ver = pick3(&env.node_version, cap_r, DEFAULT_RUNTIME_VERSION);
+        // 版本三项【全部固定到当前真实 CC 版本】(不再吸取/透传客户端版本):
+        // 之前"吸取啥钉啥"会让不同号呈现 2.1.88~2.1.168 各种版本,且 anthropic-beta 是硬编码的
+        // 不跟版本走 → 出现"UA 说版本X、beta 却是另一版本"的不自洽指纹。统一钉死后,所有号都
+        // 呈现一个一致的当前版本(UA/package/runtime/beta/body cc_version 同源),消除该信号。
+        let version = DEFAULT_VERSION.to_string();
+        let package_version = STAINLESS_PACKAGE_VERSION.to_string();
+        let runtime_ver = DEFAULT_RUNTIME_VERSION.to_string();
         let ua = format!("claude-cli/{} (external, cli)", version);
         // anthropic-beta 统一成"该模型"的标准集合(通用部分,不吸取)
         let beta = beta_header_for_model(model);
@@ -535,15 +515,10 @@ impl Rewriter {
         }
     }
 
-    /// 账号固定的 CLI 版本（吸取后存于 canonical_env.version；未吸取前为预设/默认）。
-    /// 供 normalize 时把 body 的 cc_version 也固定到与 header 同一版本，保证 header==body。
-    pub fn account_version(&self, account: &Account) -> String {
-        let v = self.parse_env(account).version;
-        if v.is_empty() {
-            DEFAULT_VERSION.to_string()
-        } else {
-            v
-        }
+    /// 发往上游的固定 CLI 版本(全部钉到当前真实 CC 版本,不再按账号吸取)。
+    /// 供 normalize 时把 body 的 cc_version 也固定到与 header 同一版本,保证 header==body 且全号一致。
+    pub fn account_version(&self, _account: &Account) -> String {
+        DEFAULT_VERSION.to_string()
     }
 
     /// 多人共号身份归一化：把"是谁/哪台机器"统一成账号的固定虚拟身份，

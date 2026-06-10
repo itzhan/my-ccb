@@ -10,7 +10,7 @@ pub struct TokenStore {
 }
 
 const TOKEN_COLS: &str =
-    "id, name, token, allowed_accounts, blocked_accounts, status, concurrency, expires_at, created_at, updated_at";
+    "id, name, token, allowed_accounts, blocked_accounts, status, category, concurrency, expires_at, created_at, updated_at";
 
 impl TokenStore {
     pub fn new(pool: AnyPool, driver: String) -> Self {
@@ -38,6 +38,10 @@ impl TokenStore {
             allowed_accounts: row.get::<String, _>("allowed_accounts"),
             blocked_accounts: row.get::<String, _>("blocked_accounts"),
             status: row.get::<String, _>("status").into(),
+            category: row
+                .try_get::<String, _>("category")
+                .unwrap_or_else(|_| "customer".into())
+                .into(),
             concurrency: row.try_get::<i64, _>("concurrency").unwrap_or(0) as i32,
             expires_at: row
                 .try_get::<Option<String>, _>("expires_at")
@@ -58,8 +62,8 @@ impl TokenStore {
     /// 创建令牌
     pub async fn create(&self, t: &mut ApiToken) -> Result<(), AppError> {
         let q = format!(
-            "INSERT INTO api_tokens (name, token, allowed_accounts, blocked_accounts, status, concurrency, expires_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, {now}, {now})",
+            "INSERT INTO api_tokens (name, token, allowed_accounts, blocked_accounts, status, category, concurrency, expires_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, {now}, {now})",
             now = self.now_expr()
         );
         let result = sqlx::query(&q)
@@ -68,6 +72,7 @@ impl TokenStore {
             .bind(&t.allowed_accounts)
             .bind(&t.blocked_accounts)
             .bind(t.status.to_string())
+            .bind(t.category.to_string())
             .bind(t.concurrency as i64)
             .bind(t.expires_at.map(|e| self.fmt_time(e)))
             .execute(&self.pool)
@@ -79,7 +84,7 @@ impl TokenStore {
     /// 更新令牌
     pub async fn update(&self, t: &ApiToken) -> Result<(), AppError> {
         let q = format!(
-            "UPDATE api_tokens SET name=$1, allowed_accounts=$2, blocked_accounts=$3, status=$4, concurrency=$5, expires_at=$6, updated_at={} WHERE id=$7",
+            "UPDATE api_tokens SET name=$1, allowed_accounts=$2, blocked_accounts=$3, status=$4, category=$5, concurrency=$6, expires_at=$7, updated_at={} WHERE id=$8",
             self.now_expr()
         );
         sqlx::query(&q)
@@ -87,6 +92,7 @@ impl TokenStore {
             .bind(&t.allowed_accounts)
             .bind(&t.blocked_accounts)
             .bind(t.status.to_string())
+            .bind(t.category.to_string())
             .bind(t.concurrency as i64)
             .bind(t.expires_at.map(|e| self.fmt_time(e)))
             .bind(t.id)
@@ -136,6 +142,19 @@ impl TokenStore {
             TOKEN_COLS
         );
         let rows = sqlx::query(&q).fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| self.row_to_token(r)).collect())
+    }
+
+    /// 按分类列出令牌（养号页选择 warmup 令牌用）
+    pub async fn list_by_category(&self, category: &str) -> Result<Vec<ApiToken>, AppError> {
+        let q = format!(
+            "SELECT {} FROM api_tokens WHERE category=$1 ORDER BY created_at DESC",
+            TOKEN_COLS
+        );
+        let rows = sqlx::query(&q)
+            .bind(category)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows.iter().map(|r| self.row_to_token(r)).collect())
     }
 

@@ -5,3 +5,4 @@ pub mod memory;
 pub mod redis;
 pub mod token_store;
 pub mod usage_store;
+pub mod warmup_store;

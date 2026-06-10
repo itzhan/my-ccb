@@ -511,29 +511,8 @@ impl GatewayService {
                     } else {
                         String::new() // off:session_id 原样透传(不归并),便于 A/B 对照封号
                     };
-                    // 漏点A:版本坐标始终从本请求自身提取,让 header 版本 == body 版本(消除不一致)
-                    let pkg = headers
-                        .get("x-stainless-package-version")
-                        .cloned()
-                        .unwrap_or_default();
-                    let rt = headers
-                        .get("x-stainless-runtime-version")
-                        .cloned()
-                        .unwrap_or_default();
-                    let coords = crate::service::rewriter::extract_captured_coords(&ua, &pkg, &rt);
-                    // 首次吸取异步存库(仅供面板展示,不影响实际发送)
-                    if account.needs_identity_capture() && !coords.cc_version.is_empty() {
-                        let svc = self.account_svc.clone();
-                        let (aid, cv, pv, rv) = (
-                            account.id,
-                            coords.cc_version.clone(),
-                            coords.package_version.clone(),
-                            coords.runtime_version.clone(),
-                        );
-                        tokio::spawn(async move {
-                            svc.persist_captured_identity(aid, &cv, &pv, &rv).await;
-                        });
-                    }
+                    // 版本不再吸取:UA/package/runtime/body cc_version 全部固定到当前真实 CC 版本
+                    // (见 rewriter::DEFAULT_VERSION + beta_header_for_model),保证全号版本自洽一致。
                     // billing 块按 billing_mode 处理。
                     // ⚠️ 关键(踩过坑):Strip 模式【绝不能】动 billing 块 ——
                     //   isolate_billing_block 会重构 system[0]、reattest_cch/cch attestation 会每请求
@@ -559,7 +538,7 @@ impl GatewayService {
                         &mut h,
                         &account,
                         &req_model,
-                        Some(&coords),
+                        None,
                     );
                     // header 的 X-Claude-Code-Session-Id 同步成与 body 相同的虚拟 session,
                     // 否则上游看到 header 一堆 / body 一个,不一致反而更可疑。

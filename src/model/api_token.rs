@@ -12,6 +12,8 @@ pub struct ApiToken {
     /// 逗号分隔的不可用账号 ID（空字符串表示不限制）
     pub blocked_accounts: String,
     pub status: ApiTokenStatus,
+    /// 令牌分类：customer（默认，客户用）/ warmup（养号专用，一个 key 绑一个账号）。
+    pub category: ApiTokenCategory,
     /// 该令牌允许的最大并发请求数（0 表示不限制）。
     pub concurrency: i32,
     /// 令牌过期时间（None 表示永不过期）。
@@ -41,6 +43,31 @@ impl From<String> for ApiTokenStatus {
         match s.as_str() {
             "active" => Self::Active,
             _ => Self::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiTokenCategory {
+    Customer,
+    Warmup,
+}
+
+impl std::fmt::Display for ApiTokenCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Customer => write!(f, "customer"),
+            Self::Warmup => write!(f, "warmup"),
+        }
+    }
+}
+
+impl From<String> for ApiTokenCategory {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "warmup" => Self::Warmup,
+            _ => Self::Customer,
         }
     }
 }
