@@ -681,18 +681,16 @@ async fn ensure_warmup_tokens(
     State(state): State<AppState>,
     Json(req): Json<EnsureTokensRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // 先创建缺失的(已有「恰好绑定该单账号」的养号令牌则跳过)
     let existing = state.token_store.list_by_category("warmup").await?;
-    let mut out: Vec<ApiToken> = Vec::new();
-    for acc_id in req.account_ids {
-        // 已有「恰好绑定该单账号」的养号令牌则复用
-        if let Some(t) = existing
+    for acc_id in &req.account_ids {
+        if existing
             .iter()
-            .find(|t| t.allowed_account_ids() == vec![acc_id])
+            .any(|t| t.allowed_account_ids() == vec![*acc_id])
         {
-            out.push(t.clone());
             continue;
         }
-        let acc = state.account_svc.get_account(acc_id).await?;
+        let acc = state.account_svc.get_account(*acc_id).await?;
         let name = if !acc.name.is_empty() { acc.name.clone() } else { acc.email.clone() };
         let mut token = ApiToken {
             id: 0,
@@ -708,7 +706,14 @@ async fn ensure_warmup_tokens(
             updated_at: chrono::Utc::now(),
         };
         state.token_store.create(&mut token).await?;
-        out.push(token);
+    }
+    // 重新从库读取，确保返回的 id 真实有效(不依赖 last_insert_id)
+    let all = state.token_store.list_by_category("warmup").await?;
+    let mut out: Vec<ApiToken> = Vec::new();
+    for acc_id in &req.account_ids {
+        if let Some(t) = all.iter().find(|t| t.allowed_account_ids() == vec![*acc_id]) {
+            out.push(t.clone());
+        }
     }
     Ok(Json(serde_json::json!({ "data": out })))
 }
