@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 use crate::config::WarmupRuntime;
 use crate::model::api_token::ApiTokenCategory;
+use crate::model::warmup::WarmupStatus;
 use crate::store::token_store::TokenStore;
 use crate::store::warmup_store::WarmupStore;
 
@@ -233,11 +234,19 @@ impl AccountWarmerService {
             let _ = h.await;
         }
 
-        // 收尾:被取消 => 保持 stopped;否则 completed。
+        // 收尾:被取消 => 保持 stopped;worker 已置 error => 保留 error;否则 completed。
         if cancel.is_cancelled() {
             self.warmup_store.set_status(id, "stopped").await.ok();
         } else {
-            self.warmup_store.set_status(id, "completed").await.ok();
+            let is_err = self
+                .warmup_store
+                .get_by_id(id)
+                .await
+                .map(|t| t.status == WarmupStatus::Error)
+                .unwrap_or(false);
+            if !is_err {
+                self.warmup_store.set_status(id, "completed").await.ok();
+            }
         }
         self.tasks.lock().unwrap().remove(&id);
         info!("warmup task {} 结束", id);
@@ -285,7 +294,7 @@ impl AccountWarmerService {
         // 独立工作目录 + 隔离 HOME(预置 .claude.json 跳过首启引导)。
         let work_dir = std::env::temp_dir().join(format!("ccg-warmup-{}-{}", task_id, token_id));
         std::fs::create_dir_all(&work_dir).ok();
-        seed_claude_config(&work_dir);
+        seed_claude_config(&work_dir, &token);
         let _dir_guard = scopeguard::guard(work_dir.clone(), |d| {
             std::fs::remove_dir_all(&d).ok();
         });
@@ -320,7 +329,7 @@ impl AccountWarmerService {
 
         // 等待首启稳定:补发一次回车消除可能的引导弹窗,再等输出静默。
         let _ = cancel.sleep(Duration::from_millis(1500)).await;
-        write_line(&writer, "");
+        pty_write(&writer, b"\r");
         drain_until_idle(
             &mut rx,
             Duration::from_secs(self.cfg.idle_secs),
@@ -334,9 +343,12 @@ impl AccountWarmerService {
         let mut worked = Duration::ZERO;
 
         while !cancel.is_cancelled() && Instant::now() < deadline {
-            // 抽题并提交。
+            // 抽题并提交:先发文本,停顿,再单独发回车
+            // (TUI 开了括号粘贴模式,文本和回车一起发会被当成粘贴内容,回车不触发提交)。
             let q = self.random_question();
-            write_line(&writer, &q);
+            pty_write(&writer, q.as_bytes());
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            pty_write(&writer, b"\r");
 
             // 等这一轮答完(静默判定 + 最大等待兜底)。
             let outcome = wait_turn(&mut rx, idle, turn_timeout, &cancel, deadline).await;
@@ -370,7 +382,9 @@ impl AccountWarmerService {
         }
 
         // 优雅退出 claude。
-        write_line(&writer, "/exit");
+        pty_write(&writer, b"/exit");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        pty_write(&writer, b"\r");
         let _ = cancel.sleep(Duration::from_millis(300)).await;
     }
 
@@ -417,6 +431,8 @@ impl AccountWarmerService {
         cmd.env("TERM", "xterm-256color");
         // 关闭自动更新干扰。
         cmd.env("DISABLE_AUTOUPDATER", "1");
+        // 容器内以 root 运行时,claude 默认拒绝 bypassPermissions;声明 sandbox 后放行。
+        cmd.env("IS_SANDBOX", "1");
 
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
@@ -516,11 +532,10 @@ async fn drain_until_idle(
     }
 }
 
-/// 向 PTY 写入一行并回车提交。
-fn write_line(writer: &Arc<Mutex<Box<dyn Write + Send>>>, line: &str) {
+/// 向 PTY 写入原始字节(不自动追加回车)。
+fn pty_write(writer: &Arc<Mutex<Box<dyn Write + Send>>>, bytes: &[u8]) {
     if let Ok(mut w) = writer.lock() {
-        let _ = w.write_all(line.as_bytes());
-        let _ = w.write_all(b"\r");
+        let _ = w.write_all(bytes);
         let _ = w.flush();
     }
 }
@@ -539,8 +554,9 @@ fn jittered(secs: u64, jitter_pct: u64) -> Duration {
     Duration::from_secs(v)
 }
 
-/// 预置一份 .claude.json,尽量跳过首启信任/主题/onboarding 弹窗。
-fn seed_claude_config(home: &std::path::Path) {
+/// 预置一份 .claude.json,跳过首启信任/主题/onboarding 弹窗,并预批准本 token
+/// 对应的 ANTHROPIC_API_KEY(否则交互模式会弹「是否使用此 API key」卡住)。
+fn seed_claude_config(home: &std::path::Path, token: &str) {
     let mut projects = serde_json::Map::new();
     projects.insert(
         home.to_string_lossy().to_string(),
@@ -550,12 +566,19 @@ fn seed_claude_config(home: &std::path::Path) {
             "allowedTools": []
         }),
     );
+    // claude 用 key 的末 20 位标识已批准的自定义 API key。
+    let approved = if token.len() > 20 {
+        token[token.len() - 20..].to_string()
+    } else {
+        token.to_string()
+    };
     let cfg = serde_json::json!({
         "hasCompletedOnboarding": true,
         "bypassPermissionsModeAccepted": true,
         "hasTrustDialogAccepted": true,
         "theme": "dark",
         "autoUpdates": false,
+        "customApiKeyResponses": { "approved": [approved], "rejected": [] },
         "projects": projects,
     });
     std::fs::write(
