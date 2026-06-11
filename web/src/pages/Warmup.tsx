@@ -161,6 +161,8 @@ export default function Warmup() {
   }
 
   const logCount = useMemo(() => logs.length, [logs]);
+  // 选择器只展示活跃账号(排除手动停用 disabled 和 401/异常 error)
+  const selectableAccounts = useMemo(() => accounts.filter((a) => a.status === 'active'), [accounts]);
 
   return (
     <div className="space-y-6">
@@ -314,9 +316,9 @@ export default function Warmup() {
             </div>
             <div className="space-y-2">
               <Label>养号账号（必选，可多选批量养号）</Label>
-              {accounts.length > 0 ? (
+              {selectableAccounts.length > 0 ? (
                 <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
-                  {accounts.map((a) => (
+                  {selectableAccounts.map((a) => (
                     <button key={a.id} type="button" onClick={() => toggleAccount(a.id)}
                       className={cn('rounded-md border px-2 py-0.5 text-[10px] transition-colors',
                         isAccSelected(a.id) ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-amber-300')}>
@@ -325,7 +327,7 @@ export default function Warmup() {
                   ))}
                 </div>
               ) : (
-                <p className="text-[11px] text-neutral-400">还没有账号。请先到「账号」页添加账号。</p>
+                <p className="text-[11px] text-neutral-400">没有可用账号(已停用/异常的账号不在此显示)。请到「账号」页添加或恢复账号。</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">

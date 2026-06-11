@@ -118,6 +118,9 @@ export default function Tokens() {
     return form[field].split(',').map((s) => s.trim()).includes(String(id));
   }
 
+  // 选择器只展示活跃账号(排除手动停用 disabled 和 401/异常 error)
+  const selectable = allAccounts.filter((a) => a.status === 'active');
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -231,9 +234,9 @@ export default function Tokens() {
             <div className="space-y-2">
               <Label>可用账号（选填，留空不限制）</Label>
               <Input value={form.allowed_accounts} onChange={(e) => patch({ allowed_accounts: e.target.value })} placeholder="账号 ID，逗号分隔" />
-              {allAccounts.length > 0 && (
+              {selectable.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
-                  {allAccounts.map((a) => (
+                  {selectable.map((a) => (
                     <button key={a.id} type="button" onClick={() => toggleAccountId('allowed_accounts', a.id)}
                       className={cn('rounded-md border px-2 py-0.5 text-[10px] transition-colors',
                         isSelected('allowed_accounts', a.id) ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-indigo-300')}>
@@ -246,9 +249,9 @@ export default function Tokens() {
             <div className="space-y-2">
               <Label>不可用账号（选填）</Label>
               <Input value={form.blocked_accounts} onChange={(e) => patch({ blocked_accounts: e.target.value })} placeholder="账号 ID，逗号分隔" />
-              {allAccounts.length > 0 && (
+              {selectable.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
-                  {allAccounts.map((a) => (
+                  {selectable.map((a) => (
                     <button key={a.id} type="button" onClick={() => toggleAccountId('blocked_accounts', a.id)}
                       className={cn('rounded-md border px-2 py-0.5 text-[10px] transition-colors',
                         isSelected('blocked_accounts', a.id) ? 'border-red-200 bg-red-50 text-red-500' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-red-200')}>
