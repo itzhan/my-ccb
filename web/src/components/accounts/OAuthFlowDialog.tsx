@@ -90,26 +90,34 @@ export function OAuthFlowDialog({
     setBatchResults([]);
     setBatchTotal(pairs.length);
     const acc: BatchResult[] = [];
-    for (const { proxy, key } of pairs) {
-      const short = key.length > 20 ? key.slice(0, 20) + '…' : key;
-      try {
-        const res = await api.exchangeSessionKey(key, proxy || undefined);
-        await api.createAccount({
-          email: res.email_address || '',
-          auth_type: 'oauth',
-          access_token: res.access_token || '',
-          refresh_token: res.refresh_token || '',
-          expires_at: res.expires_at ? res.expires_at * 1000 : undefined,
-          proxy_url: proxy || '',
-          account_uuid: res.account_uuid || '',
-          organization_uuid: res.organization_uuid || '',
-        });
-        acc.push({ label: res.email_address || short, ok: true, msg: '已录入' });
-      } catch (e) {
-        acc.push({ label: short, ok: false, msg: (e as Error).message || '失败' });
+    const CONCURRENCY = 5; // 并行度(同时进行的授权数)
+    let idx = 0;
+    const worker = async () => {
+      while (idx < pairs.length) {
+        const { proxy, key } = pairs[idx++];
+        const short = key.length > 20 ? key.slice(0, 20) + '…' : key;
+        try {
+          const res = await api.exchangeSessionKey(key, proxy || undefined);
+          await api.createAccount({
+            email: res.email_address || '',
+            auth_type: 'oauth',
+            access_token: res.access_token || '',
+            refresh_token: res.refresh_token || '',
+            expires_at: res.expires_at ? res.expires_at * 1000 : undefined,
+            proxy_url: proxy || '',
+            account_uuid: res.account_uuid || '',
+            organization_uuid: res.organization_uuid || '',
+            device_quota: 0, // 0 = 不限设备数
+            session_quota: 0, // 0 = 不限会话数
+          });
+          acc.push({ label: res.email_address || short, ok: true, msg: '已录入' });
+        } catch (e) {
+          acc.push({ label: short, ok: false, msg: (e as Error).message || '失败' });
+        }
+        setBatchResults([...acc]);
       }
-      setBatchResults([...acc]);
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pairs.length) }, () => worker()));
     setBatchRunning(false);
     const okN = acc.filter((r) => r.ok).length;
     toast(`批量完成:成功 ${okN}/${pairs.length}`, okN > 0 ? 'success' : 'error');
