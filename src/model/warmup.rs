@@ -70,20 +70,6 @@ impl From<String> for WarmupStatus {
     }
 }
 
-/// 一轮养号对话记录(问题 + 回答),用于「养号日志」展示对话内容。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WarmupTurn {
-    pub id: i64,
-    pub task_id: i64,
-    pub token_id: i64,
-    pub account_id: i64,
-    pub question: String,
-    pub answer: String,
-    /// done / timeout / eof / cancelled
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-}
-
 impl WarmupTask {
     /// 解析 warmup 令牌 ID 列表。
     pub fn token_id_list(&self) -> Vec<i64> {
