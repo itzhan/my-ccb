@@ -107,8 +107,15 @@ export function OAuthFlowDialog({
             proxy_url: proxy || '',
             account_uuid: res.account_uuid || '',
             organization_uuid: res.organization_uuid || '',
+            // 批量录入默认配置
+            concurrency: 10,
+            max_sessions: 10,
+            priority: 50,
             device_quota: 0, // 0 = 不限设备数
             session_quota: 0, // 0 = 不限会话数
+            warmup_skip: true, // 不参加新号升温
+            allowed_client_types: 'cli,vscode',
+            identity_mode: 'normalize', // 身份归一化
           });
           acc.push({ label: res.email_address || short, ok: true, msg: '已录入' });
         } catch (e) {

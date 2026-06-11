@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, KeyRound, Users, Search } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Plus, KeyRound, Users, Search, Pencil, Trash2, X } from 'lucide-react';
 import { api, type Account } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { useDashboardRefresh } from '@/components/Layout';
@@ -68,6 +68,20 @@ export default function Accounts() {
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
   const [refreshingUsage, setRefreshingUsage] = useState<number | null>(null);
+
+  // 多选 + 批量操作
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkEnabled, setBulkEnabled] = useState<Set<string>>(new Set());
+  const [bulkVals, setBulkVals] = useState({
+    status: 'active', concurrency: 10, max_sessions: 10, priority: 50,
+    device_quota: 0, session_quota: 0, rpm_limit: 0, window_5h_cost_cap_usd: 0,
+    warmup_skip: true, identity_mode: 'normalize',
+    allowed_client_types: ['cli', 'vscode'] as string[],
+    proxy_url: '', billing_mode: 'strip', session_mode: '',
+  });
 
   // 拉全量账号(后端单页上限 100,这里按需翻页拼全),供前端搜索/筛选/分页
   const load = useCallback(async () => {
@@ -260,6 +274,59 @@ export default function Accounts() {
 
   function applyOAuth(f: FormState) { setEditing(null); setForm(f); setShowForm(true); }
 
+  // --- 多选 / 批量 ---
+  const toggleSelect = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allFilteredSelected = filtered.length > 0 && filtered.every((a) => selected.has(a.id));
+  const toggleSelectAll = () => setSelected((s) => {
+    const n = new Set(s);
+    if (filtered.length > 0 && filtered.every((a) => n.has(a.id))) filtered.forEach((a) => n.delete(a.id));
+    else filtered.forEach((a) => n.add(a.id));
+    return n;
+  });
+  const clearSel = () => setSelected(new Set());
+  const toggleBulkField = (k: string) => setBulkEnabled((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const setBulkVal = (p: Partial<typeof bulkVals>) => setBulkVals((v) => ({ ...v, ...p }));
+  const bulkRow = (k: string, label: string, control: ReactNode) => (
+    <div className="flex items-center gap-2">
+      <input type="checkbox" className="h-4 w-4 flex-shrink-0 accent-indigo-600" checked={bulkEnabled.has(k)} onChange={() => toggleBulkField(k)} />
+      <span className={cn('w-24 flex-shrink-0 text-xs', bulkEnabled.has(k) ? 'text-neutral-700' : 'text-neutral-400')}>{label}</span>
+      <div className={cn('flex-1', !bulkEnabled.has(k) && 'pointer-events-none opacity-40')}>{control}</div>
+    </div>
+  );
+
+  // 并发执行(池),返回成功/失败计数
+  async function runPool(ids: number[], fn: (id: number) => Promise<void>, c = 5) {
+    let i = 0, ok = 0, fail = 0;
+    await Promise.all(Array.from({ length: Math.min(c, ids.length) }, async () => {
+      while (i < ids.length) { const id = ids[i++]; try { await fn(id); ok++; } catch { fail++; } }
+    }));
+    return { ok, fail };
+  }
+
+  async function executeBulkDelete() {
+    const ids = [...selected];
+    setBulkBusy(true);
+    const { ok, fail } = await runPool(ids, (id) => api.deleteAccount(id));
+    setBulkBusy(false); setBulkDeleteOpen(false); clearSel();
+    await load(); refreshDashboard();
+    toast(`批量删除完成:成功 ${ok}${fail ? `,失败 ${fail}` : ''}`, fail ? 'error' : 'success');
+  }
+
+  async function applyBulkEdit() {
+    const p: Record<string, unknown> = {};
+    for (const k of bulkEnabled) {
+      if (k === 'allowed_client_types') p.allowed_client_types = bulkVals.allowed_client_types.join(',');
+      else p[k] = (bulkVals as Record<string, unknown>)[k];
+    }
+    if (Object.keys(p).length === 0) { toast('请至少勾选一个要修改的项'); return; }
+    const ids = [...selected];
+    setBulkBusy(true);
+    const { ok, fail } = await runPool(ids, (id) => api.updateAccount(id, p).then(() => undefined));
+    setBulkBusy(false); setBulkEditOpen(false); clearSel();
+    await load(); refreshDashboard();
+    toast(`批量编辑完成:成功 ${ok}${fail ? `,失败 ${fail}` : ''}`, fail ? 'error' : 'success');
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -289,11 +356,28 @@ export default function Accounts() {
         <span className="ml-auto text-sm text-neutral-500">共 {filtered.length} 个账号</span>
       </div>
 
+      {/* 批量操作条 */}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2">
+          <span className="text-sm font-medium text-indigo-700">已选 {selected.size} 个账号</span>
+          <Button size="sm" variant="outline" onClick={() => { setBulkEnabled(new Set()); setBulkEditOpen(true); }}>
+            <Pencil className="h-3.5 w-3.5" /> 批量编辑
+          </Button>
+          <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50" onClick={() => setBulkDeleteOpen(true)}>
+            <Trash2 className="h-3.5 w-3.5" /> 批量删除
+          </Button>
+          <Button size="sm" variant="ghost" onClick={clearSel}><X className="h-3.5 w-3.5" /> 取消选择</Button>
+        </div>
+      )}
+
       <BlurFade>
         <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent bg-neutral-50/60">
+                <TableHead className="w-8">
+                  <input type="checkbox" className="h-4 w-4 align-middle accent-indigo-600" checked={allFilteredSelected} onChange={toggleSelectAll} title="全选(当前筛选)" />
+                </TableHead>
                 <TableHead>账号</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead>并发</TableHead>
@@ -312,7 +396,11 @@ export default function Accounts() {
                 const st = statusStyle(a);
                 const dead = a.status === 'disabled' || isRateLimited(a);
                 return (
-                  <TableRow key={a.id} className={cn('align-top', dead && 'opacity-60')}>
+                  <TableRow key={a.id} className={cn('align-top', dead && 'opacity-60', selected.has(a.id) && 'bg-indigo-50/40')}>
+                    {/* 选择 */}
+                    <TableCell>
+                      <input type="checkbox" className="h-4 w-4 align-middle accent-indigo-600" checked={selected.has(a.id)} onChange={() => toggleSelect(a.id)} />
+                    </TableCell>
                     {/* 账号 */}
                     <TableCell>
                       <div className="flex min-w-0 max-w-[220px] items-center gap-2">
@@ -446,7 +534,7 @@ export default function Accounts() {
               })}
               {pageItems.length === 0 && (
                 <TableRow className="border-0 hover:bg-transparent">
-                  <TableCell colSpan={11} className="py-16">
+                  <TableCell colSpan={12} className="py-16">
                     <div className="flex flex-col items-center justify-center text-neutral-400">
                       <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-neutral-100"><Users className="h-6 w-6 text-indigo-400" /></div>
                       <p className="text-sm">{allAccounts.length === 0 ? '暂无账号，点击"添加账号"开始' : '没有匹配的账号'}</p>
@@ -484,6 +572,81 @@ export default function Accounts() {
           <DialogFooter className="gap-2 pt-2">
             <Button variant="ghost" onClick={() => setShowDelete(false)}>取消</Button>
             <Button className="bg-red-500 text-white hover:bg-red-600" onClick={executeDelete}>删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量删除确认 */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>批量删除 {selected.size} 个账号</DialogTitle>
+            <DialogDescription>此操作不可撤销,确认删除所选的 {selected.size} 个账号吗？</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setBulkDeleteOpen(false)}>取消</Button>
+            <Button className="bg-red-500 text-white hover:bg-red-600" disabled={bulkBusy} onClick={executeBulkDelete}>{bulkBusy ? '删除中...' : '删除'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量编辑 */}
+      <Dialog open={bulkEditOpen} onOpenChange={setBulkEditOpen}>
+        <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>批量编辑 {selected.size} 个账号</DialogTitle>
+            <DialogDescription>勾选要修改的项,仅勾选项会应用到所选账号(未勾选的保持不变)。</DialogDescription>
+          </DialogHeader>
+          <div className="mt-1 flex-1 space-y-2.5 overflow-y-auto pr-1">
+            {bulkRow('status', '状态', (
+              <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" value={bulkVals.status} onChange={(e) => setBulkVal({ status: e.target.value })}>
+                <option value="active">启用(active)</option>
+                <option value="disabled">停用(disabled)</option>
+              </select>
+            ))}
+            {bulkRow('concurrency', '并发数', <Input type="number" min={0} value={bulkVals.concurrency} onChange={(e) => setBulkVal({ concurrency: Number(e.target.value) })} />)}
+            {bulkRow('max_sessions', '会话窗口', <Input type="number" min={0} value={bulkVals.max_sessions} onChange={(e) => setBulkVal({ max_sessions: Number(e.target.value) })} />)}
+            {bulkRow('priority', '优先级', <Input type="number" min={0} value={bulkVals.priority} onChange={(e) => setBulkVal({ priority: Number(e.target.value) })} />)}
+            {bulkRow('device_quota', '设备配额', <Input type="number" min={0} value={bulkVals.device_quota} onChange={(e) => setBulkVal({ device_quota: Number(e.target.value) })} placeholder="0=不限" />)}
+            {bulkRow('session_quota', '会话配额', <Input type="number" min={0} value={bulkVals.session_quota} onChange={(e) => setBulkVal({ session_quota: Number(e.target.value) })} placeholder="0=不限" />)}
+            {bulkRow('rpm_limit', 'RPM上限', <Input type="number" min={0} value={bulkVals.rpm_limit} onChange={(e) => setBulkVal({ rpm_limit: Number(e.target.value) })} placeholder="0=不限" />)}
+            {bulkRow('window_5h_cost_cap_usd', '5h成本上限', <Input type="number" min={0} step="0.01" value={bulkVals.window_5h_cost_cap_usd} onChange={(e) => setBulkVal({ window_5h_cost_cap_usd: Number(e.target.value) })} placeholder="0=不限" />)}
+            {bulkRow('warmup_skip', '新号升温', (
+              <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" value={bulkVals.warmup_skip ? '1' : '0'} onChange={(e) => setBulkVal({ warmup_skip: e.target.value === '1' })}>
+                <option value="1">跳过升温</option>
+                <option value="0">参与升温</option>
+              </select>
+            ))}
+            {bulkRow('identity_mode', '身份模拟', (
+              <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" value={bulkVals.identity_mode} onChange={(e) => setBulkVal({ identity_mode: e.target.value })}>
+                <option value="normalize">归一化(normalize)</option>
+                <option value="passthrough">透传(passthrough)</option>
+              </select>
+            ))}
+            {bulkRow('allowed_client_types', '允许客户端', (
+              <div className="flex flex-wrap gap-1.5">
+                {['cli', 'vscode', 'sdk', 'desktop', 'other'].map((c) => {
+                  const on = bulkVals.allowed_client_types.includes(c);
+                  return (
+                    <button key={c} type="button" onClick={() => setBulkVal({ allowed_client_types: on ? bulkVals.allowed_client_types.filter((x) => x !== c) : [...bulkVals.allowed_client_types, c] })}
+                      className={cn('rounded-md border px-2 py-0.5 text-[11px]', on ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500')}>
+                      {c}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+            {bulkRow('billing_mode', '计费模式', (
+              <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" value={bulkVals.billing_mode} onChange={(e) => setBulkVal({ billing_mode: e.target.value })}>
+                <option value="strip">清除(strip)</option>
+                <option value="rewrite">重写(rewrite)</option>
+              </select>
+            ))}
+            {bulkRow('proxy_url', '代理地址', <Input value={bulkVals.proxy_url} onChange={(e) => setBulkVal({ proxy_url: e.target.value })} placeholder="http:// 或 socks5://（留空=清除代理）" />)}
+          </div>
+          <DialogFooter className="gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setBulkEditOpen(false)}>取消</Button>
+            <Button disabled={bulkBusy || bulkEnabled.size === 0} onClick={applyBulkEdit}>{bulkBusy ? '应用中...' : `应用到 ${selected.size} 个账号`}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
