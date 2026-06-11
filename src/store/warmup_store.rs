@@ -10,7 +10,7 @@ pub struct WarmupStore {
 }
 
 const COLS: &str = "id, name, token_ids, msg_interval_secs, total_duration_secs, work_duration_secs, \
-    rest_duration_secs, jitter_pct, model, status, error, messages_sent, started_at, ends_at, \
+    rest_duration_secs, jitter_pct, max_turns, model, status, error, messages_sent, started_at, ends_at, \
     last_message_at, created_at, updated_at";
 
 impl WarmupStore {
@@ -45,6 +45,7 @@ impl WarmupStore {
             work_duration_secs: row.try_get::<i64, _>("work_duration_secs").unwrap_or(0),
             rest_duration_secs: row.try_get::<i64, _>("rest_duration_secs").unwrap_or(0),
             jitter_pct: row.try_get::<i64, _>("jitter_pct").unwrap_or(20),
+            max_turns: row.try_get::<i64, _>("max_turns").unwrap_or(0),
             model: row.get::<String, _>("model"),
             status: row.get::<String, _>("status").into(),
             error: row.get::<String, _>("error"),
@@ -62,8 +63,8 @@ impl WarmupStore {
     pub async fn create(&self, t: &mut WarmupTask) -> Result<(), AppError> {
         let q = format!(
             "INSERT INTO warmup_tasks (name, token_ids, msg_interval_secs, total_duration_secs, \
-             work_duration_secs, rest_duration_secs, jitter_pct, model, status, created_at, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,{now},{now})",
+             work_duration_secs, rest_duration_secs, jitter_pct, max_turns, model, status, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,{now},{now})",
             now = self.now_expr()
         );
         let result = sqlx::query(&q)
@@ -74,6 +75,7 @@ impl WarmupStore {
             .bind(t.work_duration_secs)
             .bind(t.rest_duration_secs)
             .bind(t.jitter_pct)
+            .bind(t.max_turns)
             .bind(&t.model)
             .bind(t.status.to_string())
             .execute(&self.pool)
@@ -86,7 +88,7 @@ impl WarmupStore {
     pub async fn update(&self, t: &WarmupTask) -> Result<(), AppError> {
         let q = format!(
             "UPDATE warmup_tasks SET name=$1, token_ids=$2, msg_interval_secs=$3, total_duration_secs=$4, \
-             work_duration_secs=$5, rest_duration_secs=$6, jitter_pct=$7, model=$8, updated_at={} WHERE id=$9",
+             work_duration_secs=$5, rest_duration_secs=$6, jitter_pct=$7, max_turns=$8, model=$9, updated_at={} WHERE id=$10",
             self.now_expr()
         );
         sqlx::query(&q)
@@ -97,6 +99,7 @@ impl WarmupStore {
             .bind(t.work_duration_secs)
             .bind(t.rest_duration_secs)
             .bind(t.jitter_pct)
+            .bind(t.max_turns)
             .bind(&t.model)
             .bind(t.id)
             .execute(&self.pool)

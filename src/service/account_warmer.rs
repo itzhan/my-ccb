@@ -214,6 +214,7 @@ impl AccountWarmerService {
             let work = task.work_duration_secs.max(0) as u64;
             let rest = task.rest_duration_secs.max(0) as u64;
             let jitter = task.jitter_pct.clamp(0, 100) as u64;
+            let max_turns = task.max_turns.max(0) as u64;
             handles.push(tokio::spawn(async move {
                 svc.session_worker(
                     id,
@@ -224,6 +225,7 @@ impl AccountWarmerService {
                     work,
                     rest,
                     jitter,
+                    max_turns,
                     deadline_instant,
                     cancel,
                 )
@@ -263,6 +265,7 @@ impl AccountWarmerService {
         work_secs: u64,
         rest_secs: u64,
         jitter_pct: u64,
+        max_turns: u64,
         deadline: Instant,
         cancel: Cancel,
     ) {
@@ -341,6 +344,7 @@ impl AccountWarmerService {
         let idle = Duration::from_secs(self.cfg.idle_secs);
         let turn_timeout = Duration::from_secs(self.cfg.turn_timeout_secs);
         let mut worked = Duration::ZERO;
+        let mut turns_in_session: u64 = 0;
 
         while !cancel.is_cancelled() && Instant::now() < deadline {
             // 抽题并提交:先发文本,停顿,再单独发回车
@@ -357,6 +361,19 @@ impl AccountWarmerService {
                 TurnOutcome::Deadline => break,
                 TurnOutcome::Done | TurnOutcome::Timeout => {
                     self.warmup_store.bump_messages(task_id, 1).await.ok();
+                    turns_in_session += 1;
+                    // 达到最大轮数:发 /clear 开新对话,清空上下文(避免上下文越滚越大、消费飙升)。
+                    if max_turns > 0 && turns_in_session >= max_turns {
+                        pty_write(&writer, b"/clear");
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        pty_write(&writer, b"\r");
+                        drain_until_idle(&mut rx, idle, Duration::from_secs(15), &cancel).await;
+                        info!(
+                            "warmup task {} 令牌 {}: 已满 {} 轮,/clear 开新对话",
+                            task_id, token_id, max_turns
+                        );
+                        turns_in_session = 0;
+                    }
                 }
             }
 

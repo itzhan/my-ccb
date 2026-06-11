@@ -756,6 +756,7 @@ struct CreateWarmupTaskRequest {
     work_duration_secs: Option<i64>,
     rest_duration_secs: Option<i64>,
     jitter_pct: Option<i64>,
+    max_turns: Option<i64>,
     model: Option<String>,
 }
 
@@ -772,6 +773,7 @@ async fn create_warmup_task(
         work_duration_secs: req.work_duration_secs.unwrap_or(0).max(0),
         rest_duration_secs: req.rest_duration_secs.unwrap_or(0).max(0),
         jitter_pct: req.jitter_pct.unwrap_or(20).clamp(0, 100),
+        max_turns: req.max_turns.unwrap_or(0).max(0),
         model: req.model.unwrap_or_default(),
         status: WarmupStatus::Pending,
         error: String::new(),
@@ -815,6 +817,9 @@ async fn update_warmup_task(
     }
     if let Some(v) = updates.get("jitter_pct").and_then(|v| v.as_i64()) {
         existing.jitter_pct = v.clamp(0, 100);
+    }
+    if let Some(v) = updates.get("max_turns").and_then(|v| v.as_i64()) {
+        existing.max_turns = v.max(0);
     }
     if let Some(v) = updates.get("model").and_then(|v| v.as_str()) {
         existing.model = v.to_string();

@@ -17,6 +17,8 @@ pub struct WarmupTask {
     pub rest_duration_secs: i64,
     /// 间隔抖动百分比（0-100），让节奏更像真人；0 表示不抖动。
     pub jitter_pct: i64,
+    /// 单个对话最大轮数,达到后发 /clear 开新对话(控制上下文/消费);0 表示不限、永不清。
+    pub max_turns: i64,
     /// 可选模型别名（如 opus / sonnet），空表示用账号默认。
     pub model: String,
     pub status: WarmupStatus,

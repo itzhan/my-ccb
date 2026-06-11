@@ -198,6 +198,11 @@ pub async fn migrate(pool: &AnyPool, driver: &str) -> Result<(), sqlx::Error> {
         }
         sqlx::query(stmt).execute(pool).await?;
     }
+    // warmup_tasks 增量迁移
+    sqlx::query("ALTER TABLE warmup_tasks ADD COLUMN max_turns INTEGER NOT NULL DEFAULT 0")
+        .execute(pool)
+        .await
+        .ok();
 
     // 用量记录表（调用明细 usage_logs + 每日汇总 usage_daily）
     let usage_schema = if driver == "sqlite" { SQLITE_USAGE_SCHEMA } else { PG_USAGE_SCHEMA };
@@ -397,6 +402,7 @@ CREATE TABLE IF NOT EXISTS warmup_tasks (
     work_duration_secs  INTEGER NOT NULL DEFAULT 0,
     rest_duration_secs  INTEGER NOT NULL DEFAULT 0,
     jitter_pct          INTEGER NOT NULL DEFAULT 20,
+    max_turns           INTEGER NOT NULL DEFAULT 0,
     model               TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'pending',
     error               TEXT NOT NULL DEFAULT '',
@@ -419,6 +425,7 @@ CREATE TABLE IF NOT EXISTS warmup_tasks (
     work_duration_secs  BIGINT NOT NULL DEFAULT 0,
     rest_duration_secs  BIGINT NOT NULL DEFAULT 0,
     jitter_pct          BIGINT NOT NULL DEFAULT 20,
+    max_turns           BIGINT NOT NULL DEFAULT 0,
     model               TEXT NOT NULL DEFAULT '',
     status              TEXT NOT NULL DEFAULT 'pending',
     error               TEXT NOT NULL DEFAULT '',

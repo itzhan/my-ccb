@@ -21,10 +21,11 @@ interface TaskForm {
   work_min: number;
   rest_min: number;
   jitter_pct: number;
+  max_turns: number;
   model: string;
 }
 const emptyForm = (): TaskForm => ({
-  name: '', account_ids: '', msg_interval_secs: 60, total_min: 60, work_min: 0, rest_min: 0, jitter_pct: 20, model: '',
+  name: '', account_ids: '', msg_interval_secs: 60, total_min: 60, work_min: 0, rest_min: 0, jitter_pct: 20, max_turns: 20, model: '',
 });
 
 const STATUS_META: Record<string, { label: string; cls: string; dot: string }> = {
@@ -99,6 +100,7 @@ export default function Warmup() {
       work_min: Math.round(t.work_duration_secs / 60),
       rest_min: Math.round(t.rest_duration_secs / 60),
       jitter_pct: t.jitter_pct,
+      max_turns: t.max_turns ?? 0,
       model: t.model,
     });
     loadRefs();
@@ -121,6 +123,7 @@ export default function Warmup() {
         work_duration_secs: (Number(form.work_min) || 0) * 60,
         rest_duration_secs: (Number(form.rest_min) || 0) * 60,
         jitter_pct: Number(form.jitter_pct) || 0,
+        max_turns: Math.max(0, Number(form.max_turns) || 0),
         model: form.model.trim(),
       };
       if (editing) await api.updateWarmupTask(editing.id, payload);
@@ -208,6 +211,7 @@ export default function Warmup() {
                       <div className="text-neutral-400">
                         {t.work_duration_secs > 0 ? `工作 ${fmtSecs(t.work_duration_secs)}/休息 ${fmtSecs(t.rest_duration_secs)}` : '不休息'}
                         {t.jitter_pct > 0 ? ` · 抖动 ${t.jitter_pct}%` : ''}
+                        {t.max_turns > 0 ? ` · ${t.max_turns}轮/清` : ''}
                       </div>
                     </TableCell>
                     <TableCell className="text-sm text-neutral-700">{t.messages_sent}</TableCell>
@@ -350,6 +354,10 @@ export default function Warmup() {
               <div className="space-y-2">
                 <Label>间隔抖动（%）</Label>
                 <Input type="number" min={0} max={100} value={form.jitter_pct} onChange={(e) => patch({ jitter_pct: Number(e.target.value) })} />
+              </div>
+              <div className="space-y-2">
+                <Label>最大对话轮数（0=不清）</Label>
+                <Input type="number" min={0} value={form.max_turns} onChange={(e) => patch({ max_turns: Number(e.target.value) })} placeholder="满N轮自动 /clear 开新对话" />
               </div>
               <div className="space-y-2">
                 <Label>模型（选填）</Label>

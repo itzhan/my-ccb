@@ -135,6 +135,7 @@ export interface WarmupTask {
   work_duration_secs: number;
   rest_duration_secs: number;
   jitter_pct: number;
+  max_turns: number;
   model: string;
   status: string;
   error: string;
