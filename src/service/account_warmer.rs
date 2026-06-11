@@ -438,6 +438,16 @@ impl AccountWarmerService {
             cmd.arg("--model");
             cmd.arg(model);
         }
+        // 养号只要纯文字问答:禁工具,避免模型进入 Bash/Read 等 agentic 多步循环
+        // (否则一个问题会炸出十几次 API 调用,某些账号被狂调、消费飙升)。
+        cmd.arg("--append-system-prompt");
+        cmd.arg(
+            "You are warming up an account by chatting. Answer each question directly in concise \
+             plain text only. Never use any tools, never read or write files, never run commands, \
+             never browse the web. 仅用简洁纯文字直接回答,绝不使用任何工具、不读写文件、不执行命令、不联网。",
+        );
+        cmd.arg("--disallowedTools");
+        cmd.arg("Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit MultiEdit Task TodoWrite");
         cmd.cwd(work_dir);
         cmd.env("ANTHROPIC_BASE_URL", &self.cfg.base_url);
         cmd.env("ANTHROPIC_API_KEY", token);
