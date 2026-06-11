@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use once_cell::sync::Lazy;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use rand::Rng;
+use regex::Regex;
 use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio::time::Instant;
 use tracing::{info, warn};
@@ -214,10 +216,12 @@ impl AccountWarmerService {
             let work = task.work_duration_secs.max(0) as u64;
             let rest = task.rest_duration_secs.max(0) as u64;
             let jitter = task.jitter_pct.clamp(0, 100) as u64;
+            let account_id = token.allowed_account_ids().first().copied().unwrap_or(0);
             handles.push(tokio::spawn(async move {
                 svc.session_worker(
                     id,
                     token.id,
+                    account_id,
                     token.token,
                     model,
                     interval,
@@ -257,6 +261,7 @@ impl AccountWarmerService {
         self: Arc<Self>,
         task_id: i64,
         token_id: i64,
+        account_id: i64,
         token: String,
         model: String,
         interval_secs: u64,
@@ -350,14 +355,27 @@ impl AccountWarmerService {
             tokio::time::sleep(Duration::from_millis(250)).await;
             pty_write(&writer, b"\r");
 
-            // 等这一轮答完(静默判定 + 最大等待兜底)。
-            let outcome = wait_turn(&mut rx, idle, turn_timeout, &cancel, deadline).await;
+            // 等这一轮答完(静默判定 + 最大等待兜底),同时收集 PTY 输出作为回答。
+            let mut buf: Vec<u8> = Vec::new();
+            let outcome = wait_turn(&mut rx, idle, turn_timeout, &cancel, deadline, &mut buf).await;
+            let answer = clean_terminal(&buf, &q);
             match outcome {
-                TurnOutcome::Cancelled | TurnOutcome::Eof => break,
-                TurnOutcome::Deadline => break,
                 TurnOutcome::Done | TurnOutcome::Timeout => {
+                    let st = if matches!(outcome, TurnOutcome::Done) { "done" } else { "timeout" };
+                    self.warmup_store
+                        .insert_turn(task_id, token_id, account_id, &q, &answer, st)
+                        .await
+                        .ok();
                     self.warmup_store.bump_messages(task_id, 1).await.ok();
                 }
+                TurnOutcome::Eof => {
+                    self.warmup_store
+                        .insert_turn(task_id, token_id, account_id, &q, &answer, "eof")
+                        .await
+                        .ok();
+                    break;
+                }
+                TurnOutcome::Cancelled | TurnOutcome::Deadline => break,
             }
 
             if Instant::now() >= deadline {
@@ -487,7 +505,9 @@ async fn wait_turn(
     turn_timeout: Duration,
     cancel: &Cancel,
     deadline: Instant,
+    buf: &mut Vec<u8>,
 ) -> TurnOutcome {
+    const MAX_BUF: usize = 256 * 1024;
     let start = Instant::now();
     let mut got_output = false;
     loop {
@@ -501,7 +521,12 @@ async fn wait_turn(
             return TurnOutcome::Timeout;
         }
         match tokio::time::timeout(idle, rx.recv()).await {
-            Ok(Some(_)) => got_output = true,
+            Ok(Some(chunk)) => {
+                got_output = true;
+                if buf.len() < MAX_BUF {
+                    buf.extend_from_slice(&chunk);
+                }
+            }
             Ok(None) => return TurnOutcome::Eof,
             Err(_) => {
                 if got_output {
@@ -510,6 +535,60 @@ async fn wait_turn(
             }
         }
     }
+}
+
+/// 把 PTY 原始输出(满是 ANSI/重绘)尽力清洗成可读的回答文本。
+/// 这是终端抓取的近似结果,可能含少量界面字符。
+fn clean_terminal(raw: &[u8], question: &str) -> String {
+    static OSC: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)").unwrap());
+    static CSI: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap());
+    static OTHER: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1b[@-Z\\-_=>]").unwrap());
+    static MULTISPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ \t]{2,}").unwrap());
+
+    let s = String::from_utf8_lossy(raw);
+    let s = OSC.replace_all(&s, "");
+    let s = CSI.replace_all(&s, "");
+    let s = OTHER.replace_all(&s, "");
+    // 去回车,按换行切；过滤界面噪声行 + 连续重复行(流式重绘)。
+    let q_trim = question.trim();
+    let mut out: Vec<String> = Vec::new();
+    for line in s.replace('\r', "\n").split('\n') {
+        let l = MULTISPACE.replace_all(line.trim(), " ").trim().to_string();
+        if l.is_empty() {
+            continue;
+        }
+        if is_chrome_line(&l) || l == q_trim {
+            continue;
+        }
+        if out.last().map(|p| p == &l).unwrap_or(false) {
+            continue; // 折叠相邻重复
+        }
+        out.push(l);
+    }
+    let mut text = out.join("\n");
+    if text.chars().count() > 4000 {
+        text = text.chars().take(4000).collect::<String>() + " …";
+    }
+    text
+}
+
+/// 判断是否是 TUI 界面噪声行(页脚/提示/分隔线/输入框等)。
+fn is_chrome_line(l: &str) -> bool {
+    // 纯分隔线/边框
+    if l.chars().all(|c| "─━—-│┃┌┐└┘├┤┬┴┼ ·•".contains(c)) {
+        return true;
+    }
+    if l.starts_with('❯') || l.starts_with('›') || l.starts_with("> ") {
+        return true;
+    }
+    const MARKERS: &[&str] = &[
+        "bypass permissions", "shift+tab", "Press Ctrl", "for agents", "to confirm",
+        "Esc to", "esc to interrupt", "Churned", "/effort", "for shortcuts", "? for",
+        "claude update", "setup issue", "/doctor", "missing or broken", "is now available",
+        "Bypassing Permissions", "cwd:", "Welcome to Claude", "Auto-update", "tokens)",
+        "⏵", "✻", "✳", "⎿",
+    ];
+    MARKERS.iter().any(|m| l.contains(m))
 }
 
 /// 启动后排空输出直到静默(或到最大等待)。

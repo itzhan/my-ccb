@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Flame, Play, Square, ScrollText } from 'lucide-react';
-import { api, type WarmupTask, type ApiToken, type Account, type UsageLog } from '@/api';
+import { api, type WarmupTask, type ApiToken, type Account, type WarmupTurn } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { usePolling } from '@/hooks/usePolling';
 import { cn } from '@/lib/utils';
@@ -47,7 +47,8 @@ export default function Warmup() {
   const [tasks, setTasks] = useState<WarmupTask[]>([]);
   const [tokens, setTokens] = useState<ApiToken[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [logs, setLogs] = useState<UsageLog[]>([]);
+  const [turns, setTurns] = useState<WarmupTurn[]>([]);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [qCount, setQCount] = useState<number>(0);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<WarmupTask | null>(null);
@@ -71,8 +72,11 @@ export default function Warmup() {
 
   const load = useCallback(async () => {
     try { setTasks((await api.listWarmupTasks()).data ?? []); } catch { /* ignore */ }
-    try { setLogs((await api.getWarmupLogs(1, 50)).data ?? []); } catch { /* ignore */ }
+    try { setTurns((await api.getWarmupTurns(1, 40)).data ?? []); } catch { /* ignore */ }
   }, []);
+  const toggleExpand = (id: number) => setExpanded((s) => {
+    const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n;
+  });
   const loadRefs = useCallback(async () => {
     try { setTokens((await api.listWarmupTokens()).data ?? []); } catch { setTokens([]); }
     try { setAccounts((await api.listAccounts(1, 100)).data ?? []); } catch { setAccounts([]); }
@@ -160,7 +164,7 @@ export default function Warmup() {
     return ids.map((id) => accName(id)).join(', ');
   }
 
-  const logCount = useMemo(() => logs.length, [logs]);
+  const turnsCount = useMemo(() => turns.length, [turns]);
 
   return (
     <div className="space-y-6">
@@ -247,55 +251,50 @@ export default function Warmup() {
         </div>
       </BlurFade>
 
-      {/* 养号日志 */}
+      {/* 养号日志:对话记录 */}
       <BlurFade>
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <ScrollText className="h-4 w-4 text-neutral-500" />
-            <h3 className="text-sm font-medium text-neutral-700">养号日志</h3>
-            <span className="text-xs text-neutral-400">最近 {logCount} 条养号调用(每 5 秒刷新)</span>
+            <h3 className="text-sm font-medium text-neutral-700">养号日志 · 对话记录</h3>
+            <span className="text-xs text-neutral-400">最近 {turnsCount} 轮(每 5 秒刷新,回答为终端抓取的近似文本)</span>
           </div>
-          <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-neutral-50/60 hover:bg-transparent">
-                  <TableHead>时间</TableHead>
-                  <TableHead>账号</TableHead>
-                  <TableHead>模型</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>输入/输出</TableHead>
-                  <TableHead>耗时</TableHead>
-                  <TableHead>错误</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {logs.map((l) => {
-                  const ok = l.status_code > 0 && l.status_code < 400;
-                  return (
-                    <TableRow key={l.id} className="align-top">
-                      <TableCell className="text-xs text-neutral-500 whitespace-nowrap">{new Date(l.created_at).toLocaleTimeString('zh-CN')}</TableCell>
-                      <TableCell className="max-w-[140px] truncate text-xs text-neutral-700" title={accName(l.account_id)}>{accName(l.account_id)}</TableCell>
-                      <TableCell className="text-xs text-neutral-600">{l.model || '—'}</TableCell>
-                      <TableCell>
-                        <span className={cn('rounded px-1.5 py-0.5 text-[11px]', l.status_code === 0 ? 'bg-neutral-100 text-neutral-500' : ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600')}>
-                          {l.status_code || '—'}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-xs text-neutral-600 whitespace-nowrap">{l.input_tokens}/{l.output_tokens}</TableCell>
-                      <TableCell className="text-xs text-neutral-500 whitespace-nowrap">{l.duration_ms}ms</TableCell>
-                      <TableCell className="max-w-[200px] truncate text-[11px] text-red-500" title={l.error}>{l.error || ''}</TableCell>
-                    </TableRow>
-                  );
-                })}
-                {logs.length === 0 && (
-                  <TableRow className="border-0 hover:bg-transparent">
-                    <TableCell colSpan={7} className="py-10">
-                      <p className="text-center text-sm text-neutral-400">暂无养号日志(开始养号后这里会显示每次调用)</p>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+          <div className="space-y-2">
+            {turns.map((t) => {
+              const ok = t.status === 'done';
+              const isOpen = expanded.has(t.id);
+              const ans = t.answer || '(未捕获到回答)';
+              return (
+                <div key={t.id} className="rounded-xl border border-neutral-200 bg-white p-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+                      <span>{new Date(t.created_at).toLocaleString('zh-CN')}</span>
+                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-neutral-600">{accName(t.account_id)}</span>
+                      <span className={cn('rounded px-1.5 py-0.5', ok ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}>
+                        {t.status}
+                      </span>
+                    </div>
+                    {t.answer && (
+                      <button onClick={() => toggleExpand(t.id)} className="text-[11px] text-indigo-500 hover:text-indigo-700">
+                        {isOpen ? '收起' : '展开回答'}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-sm font-medium text-neutral-800">
+                    <span className="mr-1 text-amber-500">问</span>{t.question}
+                  </p>
+                  <div className={cn('mt-1 text-xs text-neutral-600', !isOpen && 'line-clamp-2')}>
+                    <span className="mr-1 text-indigo-500">答</span>
+                    <span className="whitespace-pre-wrap break-words">{ans}</span>
+                  </div>
+                </div>
+              );
+            })}
+            {turns.length === 0 && (
+              <div className="rounded-xl border border-neutral-200 bg-white py-10 shadow-sm">
+                <p className="text-center text-sm text-neutral-400">暂无对话记录(开始养号后这里会显示每一轮的问题与回答)</p>
+              </div>
+            )}
           </div>
         </div>
       </BlurFade>

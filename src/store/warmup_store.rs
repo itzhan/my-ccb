@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::AnyPool;
 
 use crate::error::AppError;
-use crate::model::warmup::WarmupTask;
+use crate::model::warmup::{WarmupTask, WarmupTurn};
 
 pub struct WarmupStore {
     pool: AnyPool,
@@ -177,5 +177,67 @@ impl WarmupStore {
         let q = format!("SELECT {} FROM warmup_tasks WHERE status=$1", COLS);
         let rows = sqlx::query(&q).bind(status).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(|r| self.row_to_task(r)).collect())
+    }
+
+    /// 记录一轮对话(养号日志详情)。只保留最近 1000 条。
+    pub async fn insert_turn(
+        &self,
+        task_id: i64,
+        token_id: i64,
+        account_id: i64,
+        question: &str,
+        answer: &str,
+        status: &str,
+    ) -> Result<(), AppError> {
+        let q = format!(
+            "INSERT INTO warmup_turns (task_id, token_id, account_id, question, answer, status, created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,{})",
+            self.now_expr()
+        );
+        sqlx::query(&q)
+            .bind(task_id)
+            .bind(token_id)
+            .bind(account_id)
+            .bind(question)
+            .bind(answer)
+            .bind(status)
+            .execute(&self.pool)
+            .await?;
+        // 限制总量
+        sqlx::query("DELETE FROM warmup_turns WHERE id NOT IN (SELECT id FROM warmup_turns ORDER BY id DESC LIMIT 1000)")
+            .execute(&self.pool)
+            .await
+            .ok();
+        Ok(())
+    }
+
+    /// 分页列出对话记录(最新在前)。
+    pub async fn list_turns(&self, page: i64, page_size: i64) -> Result<(Vec<WarmupTurn>, i64), AppError> {
+        use sqlx::Row;
+        let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM warmup_turns")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or(0);
+        let offset = (page.max(1) - 1) * page_size;
+        let q = format!(
+            "SELECT id, task_id, token_id, account_id, question, answer, status, created_at \
+             FROM warmup_turns ORDER BY id DESC LIMIT {} OFFSET {}",
+            page_size, offset
+        );
+        let rows = sqlx::query(&q).fetch_all(&self.pool).await?;
+        let out = rows
+            .iter()
+            .map(|r| WarmupTurn {
+                id: r.try_get::<i64, _>("id").unwrap_or(0),
+                task_id: r.try_get::<i64, _>("task_id").unwrap_or(0),
+                token_id: r.try_get::<i64, _>("token_id").unwrap_or(0),
+                account_id: r.try_get::<i64, _>("account_id").unwrap_or(0),
+                question: r.try_get::<String, _>("question").unwrap_or_default(),
+                answer: r.try_get::<String, _>("answer").unwrap_or_default(),
+                status: r.try_get::<String, _>("status").unwrap_or_default(),
+                created_at: r.get::<String, _>("created_at").parse().unwrap_or_else(|_| Utc::now()),
+            })
+            .collect();
+        Ok((out, total))
     }
 }

@@ -406,7 +406,18 @@ CREATE TABLE IF NOT EXISTS warmup_tasks (
     last_message_at     TEXT,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
     updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-)
+);
+CREATE TABLE IF NOT EXISTS warmup_turns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id     INTEGER NOT NULL DEFAULT 0,
+    token_id    INTEGER NOT NULL DEFAULT 0,
+    account_id  INTEGER NOT NULL DEFAULT 0,
+    question    TEXT NOT NULL DEFAULT '',
+    answer      TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_warmup_turns_created ON warmup_turns(created_at)
 "#;
 
 const PG_WARMUP_SCHEMA: &str = r#"
@@ -428,7 +439,18 @@ CREATE TABLE IF NOT EXISTS warmup_tasks (
     last_message_at     TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
+);
+CREATE TABLE IF NOT EXISTS warmup_turns (
+    id          BIGSERIAL PRIMARY KEY,
+    task_id     BIGINT NOT NULL DEFAULT 0,
+    token_id    BIGINT NOT NULL DEFAULT 0,
+    account_id  BIGINT NOT NULL DEFAULT 0,
+    question    TEXT NOT NULL DEFAULT '',
+    answer      TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_warmup_turns_created ON warmup_turns(created_at)
 "#;
 
 const PG_USAGE_SCHEMA: &str = r#"

@@ -112,6 +112,7 @@ pub fn build_router(
         .route("/admin/warmup/tokens", get(list_warmup_tokens))
         .route("/admin/warmup/ensure-tokens", post(ensure_warmup_tokens))
         .route("/admin/warmup/logs", get(get_warmup_logs))
+        .route("/admin/warmup/turns", get(get_warmup_turns))
         .route("/admin/warmup/questions", get(warmup_questions))
         .route("/admin/warmup/questions/count", get(warmup_questions_count))
         .route("/admin/dashboard", get(get_dashboard))
@@ -716,6 +717,24 @@ async fn ensure_warmup_tokens(
         }
     }
     Ok(Json(serde_json::json!({ "data": out })))
+}
+
+/// 养号对话记录(问题+回答),分页,最新在前。
+async fn get_warmup_turns(
+    State(state): State<AppState>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(30).clamp(1, 100);
+    let (rows, total) = state.warmup_store.list_turns(page, page_size).await?;
+    let total_pages = if page_size > 0 { (total + page_size - 1) / page_size } else { 0 };
+    Ok(Json(serde_json::json!({
+        "data": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    })))
 }
 
 /// 养号日志：warmup 分类令牌产生的调用明细（分页）。

@@ -146,6 +146,17 @@ export interface WarmupTask {
   updated_at: string;
 }
 
+export interface WarmupTurn {
+  id: number;
+  task_id: number;
+  token_id: number;
+  account_id: number;
+  question: string;
+  answer: string;
+  status: string;
+  created_at: string;
+}
+
 export interface UsageLog {
   id: number;
   token_id: number;
@@ -235,6 +246,8 @@ export const api = {
     request<{ data: ApiToken[] }>('POST', '/admin/warmup/ensure-tokens', { account_ids: accountIds }),
   getWarmupLogs: (page = 1, pageSize = 50) =>
     request<PagedResult<UsageLog>>('GET', `/admin/warmup/logs?page=${page}&page_size=${pageSize}`),
+  getWarmupTurns: (page = 1, pageSize = 30) =>
+    request<PagedResult<WarmupTurn>>('GET', `/admin/warmup/turns?page=${page}&page_size=${pageSize}`),
   warmupQuestionsCount: () => request<{ count: number }>('GET', '/admin/warmup/questions/count'),
 
   getDashboard: () => request<Dashboard>('GET', '/admin/dashboard'),
