@@ -473,7 +473,7 @@ export default function Accounts() {
       )}
 
       <AccountFormDialog open={showForm} onOpenChange={setShowForm} editing={editing} form={form} patch={patch} onSubmit={save} />
-      <OAuthFlowDialog open={showOAuth} onOpenChange={setShowOAuth} onApply={applyOAuth} />
+      <OAuthFlowDialog open={showOAuth} onOpenChange={setShowOAuth} onApply={applyOAuth} onRefresh={load} />
 
       <Dialog open={showDelete} onOpenChange={setShowDelete}>
         <DialogContent className="sm:max-w-sm">

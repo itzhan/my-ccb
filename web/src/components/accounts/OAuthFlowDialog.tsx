@@ -10,8 +10,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { emptyForm, type FormState } from './form';
 
-type Mode = 'oauth' | 'setup_token' | 'session_key';
+type Mode = 'oauth' | 'setup_token' | 'session_key' | 'batch';
 type Step = 'generate' | 'exchange' | 'done';
+type BatchResult = { label: string; ok: boolean; msg: string };
+
+/** 解析批量文本:去空行后,两行一组(第一行代理,第二行 sessionKey)。 */
+function parsePairs(text: string): { proxy: string; key: string }[] {
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  const pairs: { proxy: string; key: string }[] = [];
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    pairs.push({ proxy: lines[i], key: lines[i + 1] });
+  }
+  return pairs;
+}
 
 async function copyText(text: string, toast: (m: string, t?: 'success' | 'error') => void) {
   if (!text) return toast('没有可复制的内容');
@@ -26,11 +37,12 @@ async function copyText(text: string, toast: (m: string, t?: 'success' | 'error'
   } catch { toast('复制失败'); }
 }
 
-function pill(active: boolean, tone: 'amber' | 'terra' | 'emerald') {
+function pill(active: boolean, tone: 'amber' | 'terra' | 'emerald' | 'sky') {
   const on = {
     amber: 'bg-amber-50 border-amber-300 text-amber-700',
     terra: 'bg-indigo-50 border-indigo-300 text-indigo-700',
     emerald: 'bg-emerald-50 border-emerald-300 text-emerald-700',
+    sky: 'bg-sky-50 border-sky-300 text-sky-700',
   }[tone];
   return cn(
     'flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all',
@@ -42,10 +54,12 @@ export function OAuthFlowDialog({
   open,
   onOpenChange,
   onApply,
+  onRefresh,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onApply: (form: FormState) => void;
+  onRefresh?: () => void;
 }) {
   const toast = useToast();
   const [mode, setMode] = useState<Mode>('oauth');
@@ -57,10 +71,49 @@ export function OAuthFlowDialog({
   const [sessionKey, setSessionKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<OAuthExchangeResult | null>(null);
+  // 批量录入
+  const [batchText, setBatchText] = useState('');
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
+  const [batchTotal, setBatchTotal] = useState(0);
 
   function reset() {
     setMode('oauth'); setStep('generate'); setProxyUrl(''); setSessionId('');
     setAuthUrl(''); setCode(''); setSessionKey(''); setLoading(false); setResult(null);
+    setBatchText(''); setBatchRunning(false); setBatchResults([]); setBatchTotal(0);
+  }
+
+  async function runBatch() {
+    const pairs = parsePairs(batchText);
+    if (pairs.length === 0) return toast('没有可录入的内容(每两行一组:代理 + sessionKey)');
+    setBatchRunning(true);
+    setBatchResults([]);
+    setBatchTotal(pairs.length);
+    const acc: BatchResult[] = [];
+    for (const { proxy, key } of pairs) {
+      const short = key.length > 20 ? key.slice(0, 20) + '…' : key;
+      try {
+        const res = await api.exchangeSessionKey(key, proxy || undefined);
+        await api.createAccount({
+          email: res.email_address || '',
+          auth_type: 'oauth',
+          access_token: res.access_token || '',
+          refresh_token: res.refresh_token || '',
+          expires_at: res.expires_at ? res.expires_at * 1000 : undefined,
+          proxy_url: proxy || '',
+          account_uuid: res.account_uuid || '',
+          organization_uuid: res.organization_uuid || '',
+        });
+        acc.push({ label: res.email_address || short, ok: true, msg: '已录入' });
+      } catch (e) {
+        acc.push({ label: short, ok: false, msg: (e as Error).message || '失败' });
+      }
+      setBatchResults([...acc]);
+    }
+    setBatchRunning(false);
+    const okN = acc.filter((r) => r.ok).length;
+    toast(`批量完成:成功 ${okN}/${pairs.length}`, okN > 0 ? 'success' : 'error');
+    onRefresh?.();
   }
 
   function close(o: boolean) {
@@ -130,22 +183,56 @@ export function OAuthFlowDialog({
             <>
               <div className="space-y-2">
                 <Label>授权类型</Label>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={() => setMode('oauth')} className={pill(mode === 'oauth', 'amber')}>OAuth（完整）</button>
                   <button type="button" onClick={() => setMode('setup_token')} className={pill(mode === 'setup_token', 'terra')}>Setup Token</button>
                   <button type="button" onClick={() => setMode('session_key')} className={pill(mode === 'session_key', 'emerald')}>Session Key</button>
+                  <button type="button" onClick={() => setMode('batch')} className={pill(mode === 'batch', 'sky')}>批量 SK</button>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {mode === 'oauth' ? '完整 scope，支持 profile、用量查询等'
                     : mode === 'setup_token' ? '仅 user:inference scope，有效期 1 年'
+                    : mode === 'batch' ? '批量粘贴:每两行一组(第一行代理,第二行 sessionKey),空行自动忽略,逐个授权并录号'
                     : '粘贴 claude.ai 的 sessionKey（sk-ant-sid01-…），自动完成授权，无需浏览器'}
                 </p>
               </div>
-              <div className="space-y-2">
-                <Label>代理地址（选填）</Label>
-                <Input value={proxyUrl} onChange={(e) => setProxyUrl(e.target.value)} placeholder="http:// 或 socks5://" />
-              </div>
-              {mode === 'session_key' ? (
+              {mode !== 'batch' && (
+                <div className="space-y-2">
+                  <Label>代理地址（选填）</Label>
+                  <Input value={proxyUrl} onChange={(e) => setProxyUrl(e.target.value)} placeholder="http:// 或 socks5://" />
+                </div>
+              )}
+              {mode === 'batch' ? (
+                <>
+                  <div className="space-y-2">
+                    <Label>批量内容 <span className="text-red-400">*</span></Label>
+                    <Textarea
+                      rows={8}
+                      value={batchText}
+                      onChange={(e) => setBatchText(e.target.value)}
+                      placeholder={'每两行一组:第一行代理,第二行 sessionKey,空行忽略\n\nhttp://user:pass@1.2.3.4:8080\nsk-ant-sid01-aaaa...\nsocks5://5.6.7.8:1080\nsk-ant-sid01-bbbb...'}
+                      className="font-mono text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      共解析出 <span className="font-medium text-foreground">{parsePairs(batchText).length}</span> 组
+                    </p>
+                  </div>
+                  <Button onClick={runBatch} disabled={batchRunning || parsePairs(batchText).length === 0} className="w-full bg-sky-500 hover:bg-sky-600">
+                    {batchRunning ? `录入中 ${batchResults.length}/${batchTotal}...` : '开始批量录入'}
+                  </Button>
+                  {batchResults.length > 0 && (
+                    <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
+                      {batchResults.map((r, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs">
+                          <span className={r.ok ? 'text-emerald-600' : 'text-red-500'}>{r.ok ? '✓' : '✗'}</span>
+                          <span className="flex-1 truncate" title={r.label}>{r.label}</span>
+                          <span className={cn('truncate text-[11px]', r.ok ? 'text-muted-foreground' : 'text-red-500')} title={r.msg}>{r.msg}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : mode === 'session_key' ? (
                 <>
                   <div className="space-y-2">
                     <Label>Session Key <span className="text-red-400">*</span></Label>
