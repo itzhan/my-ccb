@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Plus, KeyRound, Users, Search, Pencil, Trash2, X, Unlock, Copy, Check } from 'lucide-react';
+import { Plus, KeyRound, Users, Search, Pencil, Trash2, X, Unlock, Copy, Check, Link2 } from 'lucide-react';
 import { api, type Account, type ApiToken } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { useDashboardRefresh } from '@/components/Layout';
@@ -89,6 +89,10 @@ export default function Accounts() {
   const [bulkTokenForm, setBulkTokenForm] = useState({ name: '', category: 'customer', concurrency: 0, expires_at: '' });
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
+
+  // 批量绑定到已有令牌(追加,已绑定的跳过)
+  const [bindTokenOpen, setBindTokenOpen] = useState(false);
+  const [bindTokenId, setBindTokenId] = useState('');
 
   // 拉全量账号(后端单页上限 100,这里按需翻页拼全),供前端搜索/筛选/分页
   const load = useCallback(async () => {
@@ -389,6 +393,29 @@ export default function Accounts() {
     } catch { toast('复制失败'); }
   }
 
+  // 把所选账号追加进已有令牌的可用账号(去重:已绑定的跳过)
+  async function bindToToken() {
+    const t = allTokens.find((x) => x.id === Number(bindTokenId));
+    if (!t) { toast('请选择令牌'); return; }
+    const existing = (t.allowed_accounts || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const add = [...selected].sort((x, y) => x - y).map(String).filter((id) => !existing.includes(id));
+    if (add.length === 0) {
+      toast('所选账号均已绑定该令牌,无需追加', 'success');
+      setBindTokenOpen(false);
+      return;
+    }
+    try {
+      setBulkBusy(true);
+      await api.updateToken(t.id, { allowed_accounts: [...existing, ...add].join(',') });
+      toast(`已追加到「${t.name || `令牌#${t.id}`}」:新增 ${add.length} 个,跳过已有 ${selected.size - add.length} 个`, 'success');
+      setBindTokenOpen(false); clearSel(); loadTokens();
+    } catch (e) {
+      toast((e as Error).message || '绑定失败', 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   // 一键放开客户端限制(allowed_client_types 置空 = 全部放行)
   async function bulkUnrestrictClients() {
     const ids = [...selected];
@@ -464,6 +491,9 @@ export default function Accounts() {
           </Button>
           <Button size="sm" variant="outline" className="border-indigo-200 text-indigo-600 hover:bg-indigo-50" onClick={openBulkToken}>
             <KeyRound className="h-3.5 w-3.5" /> 创建令牌
+          </Button>
+          <Button size="sm" variant="outline" className="border-indigo-200 text-indigo-600 hover:bg-indigo-50" onClick={() => { setBindTokenId(''); setBindTokenOpen(true); }}>
+            <Link2 className="h-3.5 w-3.5" /> 绑定到令牌
           </Button>
           <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50" onClick={() => setBulkDeleteOpen(true)}>
             <Trash2 className="h-3.5 w-3.5" /> 批量删除
@@ -771,6 +801,44 @@ export default function Accounts() {
               </DialogFooter>
             </form>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量绑定到已有令牌 */}
+      <Dialog open={bindTokenOpen} onOpenChange={setBindTokenOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>绑定到已有令牌</DialogTitle>
+            <DialogDescription>把所选 {selected.size} 个账号追加到令牌的可用账号中,已绑定的自动跳过。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Select value={bindTokenId} onValueChange={setBindTokenId}>
+              <SelectTrigger><SelectValue placeholder="选择令牌" /></SelectTrigger>
+              <SelectContent>
+                {filterableTokens.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    🔑{t.name || `令牌#${t.id}`}(已绑 {(t.allowed_accounts || '').split(',').filter(Boolean).length} 个)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {bindTokenId && (() => {
+              const t = allTokens.find((x) => x.id === Number(bindTokenId));
+              if (!t) return null;
+              const existing = new Set((t.allowed_accounts || '').split(',').map((s) => s.trim()).filter(Boolean));
+              const addCount = [...selected].filter((id) => !existing.has(String(id))).length;
+              return (
+                <p className="text-xs text-neutral-500">
+                  将新增 <span className="font-medium text-indigo-600">{addCount}</span> 个账号
+                  {selected.size - addCount > 0 && <>,已绑定跳过 {selected.size - addCount} 个</>}
+                </p>
+              );
+            })()}
+            <DialogFooter className="gap-2 pt-2">
+              <Button type="button" variant="ghost" onClick={() => setBindTokenOpen(false)}>取消</Button>
+              <Button disabled={bulkBusy || !bindTokenId} onClick={bindToToken}>{bulkBusy ? '绑定中...' : '确认绑定'}</Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
