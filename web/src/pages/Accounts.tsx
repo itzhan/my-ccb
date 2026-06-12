@@ -506,12 +506,12 @@ export default function Accounts() {
                         {a.allowed_client_types
                           ? <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] leading-4 text-amber-700">仅 {a.allowed_client_types.split(',').filter(Boolean).join('/')}</span>
                           : <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] leading-4 text-emerald-700">全客户端</span>}
-                        {(tokensByAccount.get(a.id) ?? []).map((t) => (
+                        {(tokensByAccount.get(a.id) ?? []).filter((t) => t.category !== 'warmup').map((t) => (
                           <span key={t.id}
-                            title={`令牌 #${t.id} ${t.name || '未命名'}${t.category === 'warmup' ? '(养号)' : ''}${t.status !== 'active' ? '(已停用)' : ''}\n可用账号: ${t.allowed_accounts}`}
+                            title={`令牌 #${t.id} ${t.name || '未命名'}${t.status !== 'active' ? '(已停用)' : ''}\n可用账号: ${t.allowed_accounts}`}
                             className={cn('max-w-[110px] truncate rounded-full border px-1.5 py-px text-[10px] leading-4',
                               t.status === 'active'
-                                ? (t.category === 'warmup' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700')
+                                ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
                                 : 'border-neutral-200 bg-neutral-100 text-neutral-400 line-through')}>
                             🔑{t.name || `#${t.id}`}
                           </span>
