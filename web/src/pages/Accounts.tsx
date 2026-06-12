@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Plus, KeyRound, Users, Search, Pencil, Trash2, X, Unlock, Copy, Check } from 'lucide-react';
-import { api, type Account } from '@/api';
+import { api, type Account, type ApiToken } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { useDashboardRefresh } from '@/components/Layout';
 import { cn } from '@/lib/utils';
@@ -107,12 +107,32 @@ export default function Accounts() {
     }
   }, []);
 
+  // 拉全量令牌,用于账号列展示该账号被哪些令牌绑定(调试用)
+  const [allTokens, setAllTokens] = useState<ApiToken[]>([]);
+  const loadTokens = useCallback(async () => {
+    try { setAllTokens((await api.listTokens(1, 100)).data ?? []); } catch { setAllTokens([]); }
+  }, []);
+
+  // 账号 ID -> 绑定它的令牌列表(令牌 allowed_accounts 含该账号)
+  const tokensByAccount = useMemo(() => {
+    const m = new Map<number, ApiToken[]>();
+    for (const t of allTokens) {
+      for (const s of (t.allowed_accounts || '').split(',')) {
+        const id = Number(s.trim());
+        if (!s.trim() || Number.isNaN(id)) continue;
+        if (!m.has(id)) m.set(id, []);
+        m.get(id)!.push(t);
+      }
+    }
+    return m;
+  }, [allTokens]);
+
   // 立即加载 + 每 8s 轮询
   useEffect(() => {
-    load();
+    load(); loadTokens();
     const id = setInterval(load, 8000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, loadTokens]);
 
   // 搜索/筛选变化时回到第一页
   useEffect(() => { setPage(1); }, [search, statusFilter]);
@@ -339,6 +359,7 @@ export default function Accounts() {
       });
       setCreatedToken(t.token);
       toast('令牌创建成功', 'success');
+      loadTokens();
     } catch (e) {
       toast((e as Error).message || '创建失败', 'error');
     } finally {
@@ -480,6 +501,22 @@ export default function Accounts() {
                         </p>
                       )}
                       {a.auth_type === 'oauth' && a.auth_error && <p className="mt-0.5 max-w-[220px] truncate text-[11px] text-red-500">{a.auth_error}</p>}
+                      {/* 调试胶囊:客户端限制 + 绑定的令牌 */}
+                      <div className="mt-1 flex max-w-[220px] flex-wrap gap-1">
+                        {a.allowed_client_types
+                          ? <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] leading-4 text-amber-700">仅 {a.allowed_client_types.split(',').filter(Boolean).join('/')}</span>
+                          : <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] leading-4 text-emerald-700">全客户端</span>}
+                        {(tokensByAccount.get(a.id) ?? []).map((t) => (
+                          <span key={t.id}
+                            title={`令牌 #${t.id} ${t.name || '未命名'}${t.category === 'warmup' ? '(养号)' : ''}${t.status !== 'active' ? '(已停用)' : ''}\n可用账号: ${t.allowed_accounts}`}
+                            className={cn('max-w-[110px] truncate rounded-full border px-1.5 py-px text-[10px] leading-4',
+                              t.status === 'active'
+                                ? (t.category === 'warmup' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700')
+                                : 'border-neutral-200 bg-neutral-100 text-neutral-400 line-through')}>
+                            🔑{t.name || `#${t.id}`}
+                          </span>
+                        ))}
+                      </div>
                     </TableCell>
                     {/* 状态 */}
                     <TableCell>
@@ -566,9 +603,6 @@ export default function Accounts() {
                         <p className={a.auto_telemetry ? 'text-emerald-600' : 'text-neutral-500'}>
                           遥测{a.auto_telemetry ? '开' : '关'}{a.telemetry_count > 0 && <span className="text-neutral-400"> ·{a.telemetry_count}</span>}
                         </p>
-                        {a.allowed_client_types
-                          ? <p className="truncate text-amber-600">仅 {a.allowed_client_types.split(',').filter(Boolean).join('/')}</p>
-                          : <p className="text-emerald-600">全客户端</p>}
                       </div>
                     </TableCell>
                     {/* 配置 */}
