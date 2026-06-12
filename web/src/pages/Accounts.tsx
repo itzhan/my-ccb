@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Plus, KeyRound, Users, Search, Pencil, Trash2, X, Unlock } from 'lucide-react';
+import { Plus, KeyRound, Users, Search, Pencil, Trash2, X, Unlock, Copy, Check } from 'lucide-react';
 import { api, type Account } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { useDashboardRefresh } from '@/components/Layout';
@@ -8,6 +8,7 @@ import { isRateLimited, statusStyle, usageBarColor, formatTimeLeft, sortAccounts
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -82,6 +83,12 @@ export default function Accounts() {
     allowed_client_types: ['cli', 'vscode'] as string[],
     proxy_url: '', billing_mode: 'strip', session_mode: '',
   });
+
+  // 批量创建令牌(可用账号锁定为所选账号)
+  const [bulkTokenOpen, setBulkTokenOpen] = useState(false);
+  const [bulkTokenForm, setBulkTokenForm] = useState({ name: '', category: 'customer', concurrency: 0, expires_at: '' });
+  const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [tokenCopied, setTokenCopied] = useState(false);
 
   // 拉全量账号(后端单页上限 100,这里按需翻页拼全),供前端搜索/筛选/分页
   const load = useCallback(async () => {
@@ -312,6 +319,45 @@ export default function Accounts() {
     toast(`批量删除完成:成功 ${ok}${fail ? `,失败 ${fail}` : ''}`, fail ? 'error' : 'success');
   }
 
+  // 批量创建令牌:可用账号 = 所选账号,其余配置弹窗里正常填
+  function openBulkToken() {
+    setBulkTokenForm({ name: '', category: 'customer', concurrency: 0, expires_at: '' });
+    setCreatedToken(null); setTokenCopied(false);
+    setBulkTokenOpen(true);
+  }
+
+  async function createBulkToken() {
+    try {
+      setBulkBusy(true);
+      const t = await api.createToken({
+        name: bulkTokenForm.name,
+        category: bulkTokenForm.category,
+        allowed_accounts: [...selected].sort((x, y) => x - y).join(','),
+        blocked_accounts: '',
+        concurrency: Number(bulkTokenForm.concurrency) || 0,
+        expires_at: bulkTokenForm.expires_at ? new Date(bulkTokenForm.expires_at).toISOString() : null,
+      });
+      setCreatedToken(t.token);
+      toast('令牌创建成功', 'success');
+    } catch (e) {
+      toast((e as Error).message || '创建失败', 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function copyCreatedToken() {
+    if (!createdToken) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(createdToken);
+      else {
+        const ta = document.createElement('textarea'); ta.value = createdToken; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+      }
+      setTokenCopied(true); setTimeout(() => setTokenCopied(false), 2000);
+    } catch { toast('复制失败'); }
+  }
+
   // 一键放开客户端限制(allowed_client_types 置空 = 全部放行)
   async function bulkUnrestrictClients() {
     const ids = [...selected];
@@ -375,6 +421,9 @@ export default function Accounts() {
           </Button>
           <Button size="sm" variant="outline" className="border-emerald-200 text-emerald-600 hover:bg-emerald-50" disabled={bulkBusy} onClick={bulkUnrestrictClients}>
             <Unlock className="h-3.5 w-3.5" /> {bulkBusy ? '处理中...' : '放开客户端限制'}
+          </Button>
+          <Button size="sm" variant="outline" className="border-indigo-200 text-indigo-600 hover:bg-indigo-50" onClick={openBulkToken}>
+            <KeyRound className="h-3.5 w-3.5" /> 创建令牌
           </Button>
           <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50" onClick={() => setBulkDeleteOpen(true)}>
             <Trash2 className="h-3.5 w-3.5" /> 批量删除
@@ -517,7 +566,9 @@ export default function Accounts() {
                         <p className={a.auto_telemetry ? 'text-emerald-600' : 'text-neutral-500'}>
                           遥测{a.auto_telemetry ? '开' : '关'}{a.telemetry_count > 0 && <span className="text-neutral-400"> ·{a.telemetry_count}</span>}
                         </p>
-                        {a.allowed_client_types && <p className="truncate text-amber-600">仅 {a.allowed_client_types.split(',').filter(Boolean).join('/')}</p>}
+                        {a.allowed_client_types
+                          ? <p className="truncate text-amber-600">仅 {a.allowed_client_types.split(',').filter(Boolean).join('/')}</p>
+                          : <p className="text-emerald-600">全客户端</p>}
                       </div>
                     </TableCell>
                     {/* 配置 */}
@@ -600,6 +651,73 @@ export default function Accounts() {
             <Button variant="ghost" onClick={() => setBulkDeleteOpen(false)}>取消</Button>
             <Button className="bg-red-500 text-white hover:bg-red-600" disabled={bulkBusy} onClick={executeBulkDelete}>{bulkBusy ? '删除中...' : '删除'}</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 批量创建令牌 */}
+      <Dialog open={bulkTokenOpen} onOpenChange={setBulkTokenOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>为所选账号创建令牌</DialogTitle>
+            <DialogDescription>令牌的可用账号将自动绑定为所选的 {selected.size} 个账号,其余配置正常填写。</DialogDescription>
+          </DialogHeader>
+          {createdToken ? (
+            <div className="space-y-3">
+              <p className="text-sm text-emerald-600">令牌创建成功,请复制保存:</p>
+              <div className="flex items-center gap-2 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
+                <code className="flex-1 break-all font-mono text-[11px] text-neutral-700">{createdToken}</code>
+                <button onClick={copyCreatedToken} className="flex-shrink-0 text-neutral-400 hover:text-neutral-700" title="复制令牌">
+                  {tokenCopied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                </button>
+              </div>
+              <DialogFooter className="gap-2 pt-2">
+                <Button onClick={() => { setBulkTokenOpen(false); clearSel(); }}>完成</Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <form onSubmit={(e) => { e.preventDefault(); createBulkToken(); }} className="mt-1 space-y-4">
+              <div className="space-y-2">
+                <Label>绑定账号({selected.size} 个)</Label>
+                <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto rounded-md border border-neutral-200 bg-neutral-50 p-2">
+                  {allAccounts.filter((a) => selected.has(a.id)).map((a) => (
+                    <span key={a.id} className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] text-indigo-700">
+                      #{a.id} {a.name || a.email}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>分类</Label>
+                <div className="flex gap-1.5">
+                  {([['customer', '客户用'], ['warmup', '养号专用']] as const).map(([val, label]) => (
+                    <button key={val} type="button" onClick={() => setBulkTokenForm((f) => ({ ...f, category: val }))}
+                      className={cn('flex-1 rounded-md border px-3 py-1.5 text-xs transition-colors',
+                        bulkTokenForm.category === val ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500 hover:border-indigo-300')}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>备注名(选填)</Label>
+                <Input value={bulkTokenForm.name} onChange={(e) => setBulkTokenForm((f) => ({ ...f, name: e.target.value }))} placeholder="例如:生产环境、测试用" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>并发上限(0=不限)</Label>
+                  <Input type="number" min={0} value={bulkTokenForm.concurrency} onChange={(e) => setBulkTokenForm((f) => ({ ...f, concurrency: Number(e.target.value) }))} placeholder="0" />
+                </div>
+                <div className="space-y-2">
+                  <Label>过期时间(选填)</Label>
+                  <Input type="datetime-local" value={bulkTokenForm.expires_at} onChange={(e) => setBulkTokenForm((f) => ({ ...f, expires_at: e.target.value }))} />
+                </div>
+              </div>
+              <DialogFooter className="gap-2 pt-2">
+                <Button type="button" variant="ghost" onClick={() => setBulkTokenOpen(false)}>取消</Button>
+                <Button type="submit" disabled={bulkBusy}>{bulkBusy ? '创建中...' : '创建令牌'}</Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 
