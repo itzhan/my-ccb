@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Plus, KeyRound, Users, Search, Pencil, Trash2, X } from 'lucide-react';
+import { Plus, KeyRound, Users, Search, Pencil, Trash2, X, Unlock } from 'lucide-react';
 import { api, type Account } from '@/api';
 import { useToast } from '@/components/Toaster';
 import { useDashboardRefresh } from '@/components/Layout';
@@ -312,6 +312,16 @@ export default function Accounts() {
     toast(`批量删除完成:成功 ${ok}${fail ? `,失败 ${fail}` : ''}`, fail ? 'error' : 'success');
   }
 
+  // 一键放开客户端限制(allowed_client_types 置空 = 全部放行)
+  async function bulkUnrestrictClients() {
+    const ids = [...selected];
+    setBulkBusy(true);
+    const { ok, fail } = await runPool(ids, (id) => api.updateAccount(id, { allowed_client_types: '' }).then(() => undefined));
+    setBulkBusy(false); clearSel();
+    await load(); refreshDashboard();
+    toast(`已放开客户端限制:成功 ${ok}${fail ? `,失败 ${fail}` : ''}`, fail ? 'error' : 'success');
+  }
+
   async function applyBulkEdit() {
     const p: Record<string, unknown> = {};
     for (const k of bulkEnabled) {
@@ -362,6 +372,9 @@ export default function Accounts() {
           <span className="text-sm font-medium text-indigo-700">已选 {selected.size} 个账号</span>
           <Button size="sm" variant="outline" onClick={() => { setBulkEnabled(new Set()); setBulkEditOpen(true); }}>
             <Pencil className="h-3.5 w-3.5" /> 批量编辑
+          </Button>
+          <Button size="sm" variant="outline" className="border-emerald-200 text-emerald-600 hover:bg-emerald-50" disabled={bulkBusy} onClick={bulkUnrestrictClients}>
+            <Unlock className="h-3.5 w-3.5" /> {bulkBusy ? '处理中...' : '放开客户端限制'}
           </Button>
           <Button size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50" onClick={() => setBulkDeleteOpen(true)}>
             <Trash2 className="h-3.5 w-3.5" /> 批量删除
