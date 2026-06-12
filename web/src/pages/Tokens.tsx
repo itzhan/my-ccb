@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { BlurFade } from '@/components/magic/blur-fade';
@@ -41,6 +42,8 @@ export default function Tokens() {
   const [showDelete, setShowDelete] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  // 分类筛选,默认只显示非养号(客户用)令牌
+  const [categoryFilter, setCategoryFilter] = useState<'customer' | 'warmup' | 'all'>('customer');
 
   const load = useCallback(async () => {
     try { setTokens((await api.listTokens(1, 100)).data ?? []); } catch { setTokens([]); }
@@ -121,11 +124,23 @@ export default function Tokens() {
   // 选择器只展示活跃账号(排除手动停用 disabled 和 401/异常 error)
   const selectable = allAccounts.filter((a) => a.status === 'active');
 
+  const visibleTokens = tokens.filter((t) => categoryFilter === 'all' || (t.category || 'customer') === categoryFilter);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-neutral-900">令牌管理</h2>
-        <Button onClick={openCreate}><Plus className="h-4 w-4" /> 创建令牌</Button>
+        <div className="flex items-center gap-2">
+          <Select value={categoryFilter} onValueChange={(v) => setCategoryFilter(v as typeof categoryFilter)}>
+            <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="customer">客户用</SelectItem>
+              <SelectItem value="warmup">养号专用</SelectItem>
+              <SelectItem value="all">全部分类</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={openCreate}><Plus className="h-4 w-4" /> 创建令牌</Button>
+        </div>
       </div>
 
       <BlurFade>
@@ -144,7 +159,7 @@ export default function Tokens() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {tokens.map((t) => (
+              {visibleTokens.map((t) => (
                 <TableRow key={t.id} className="align-top">
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -189,7 +204,7 @@ export default function Tokens() {
                   </TableCell>
                 </TableRow>
               ))}
-              {tokens.length === 0 && (
+              {visibleTokens.length === 0 && (
                 <TableRow className="border-0 hover:bg-transparent">
                   <TableCell colSpan={8} className="py-16">
                     <div className="flex flex-col items-center justify-center text-neutral-400">

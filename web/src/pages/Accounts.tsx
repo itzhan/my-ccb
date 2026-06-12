@@ -134,8 +134,12 @@ export default function Accounts() {
     return () => clearInterval(id);
   }, [load, loadTokens]);
 
+  // 按令牌筛选(仅非养号令牌可选;'all'=不筛)
+  const [tokenFilter, setTokenFilter] = useState('all');
+  const filterableTokens = useMemo(() => allTokens.filter((t) => t.category !== 'warmup'), [allTokens]);
+
   // 搜索/筛选变化时回到第一页
-  useEffect(() => { setPage(1); }, [search, statusFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, tokenFilter]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -152,8 +156,14 @@ export default function Accounts() {
       if (!q) return true;
       return [a.name, a.email, a.account_uuid || ''].some((f) => f?.toLowerCase().includes(q));
     };
-    return sortAccounts(allAccounts.filter((a) => matchStatus(a) && matchSearch(a)));
-  }, [allAccounts, search, statusFilter]);
+    const matchToken = (a: Account): boolean => {
+      if (tokenFilter === 'all') return true;
+      const t = allTokens.find((x) => x.id === Number(tokenFilter));
+      if (!t) return true;
+      return (t.allowed_accounts || '').split(',').map((s) => s.trim()).includes(String(a.id));
+    };
+    return sortAccounts(allAccounts.filter((a) => matchStatus(a) && matchSearch(a) && matchToken(a)));
+  }, [allAccounts, search, statusFilter, tokenFilter, allTokens]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const curPage = Math.min(page, totalPages);
@@ -428,6 +438,15 @@ export default function Accounts() {
             <SelectItem value="ratelimited">限流中</SelectItem>
             <SelectItem value="error">异常</SelectItem>
             <SelectItem value="disabled">停用</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={tokenFilter} onValueChange={setTokenFilter}>
+          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部令牌</SelectItem>
+            {filterableTokens.map((t) => (
+              <SelectItem key={t.id} value={String(t.id)}>🔑{t.name || `令牌#${t.id}`}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <span className="ml-auto text-sm text-neutral-500">共 {filtered.length} 个账号</span>
