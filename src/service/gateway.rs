@@ -130,6 +130,16 @@ const SAME_ACCOUNT_RETRY_DELAY: Duration = Duration::from_millis(500);
 const RPM_WAIT_STEP: Duration = Duration::from_millis(500);
 /// RPM 排队最长等待（超过则放弃，返回 503/上次响应）。
 const RPM_WAIT_MAX: Duration = Duration::from_secs(20);
+/// 命中「第三方计费(extra usage)」拒绝时,该账号临时隔离时长(秒)。
+/// 不宜过长:号池小,避免误隔离把可用号清空;够长以让粘性会话改绑别的号、不反复打同一个号。
+const THIRD_PARTY_BILLING_COOLDOWN_SECS: i64 = 120;
+
+/// 上游响应体是否为 Anthropic「第三方应用走 extra usage / 非套餐额度」的计费拒绝。
+/// 形如:invalid_request_error + "Third-party apps now draw from your extra usage, not your plan limits"。
+fn is_third_party_billing_error(body: &[u8]) -> bool {
+    let s = String::from_utf8_lossy(body);
+    s.contains("Third-party apps") || s.contains("extra usage")
+}
 
 pub struct GatewayService {
     account_svc: Arc<AccountService>,
@@ -590,7 +600,7 @@ impl GatewayService {
             let final_headers = inject_auth_before_xapp(final_headers, &upstream_token);
 
             // 转发到上游
-            let (upstream_status, upstream_headers, resp) = self
+            let (upstream_status, upstream_headers, resp, billing_reject) = self
                 .forward_request(
                     &method.to_string(),
                     &path,
@@ -629,6 +639,40 @@ impl GatewayService {
                     "account {} got {}, disabled and switching to next account",
                     account.id, upstream_u16
                 );
+                exclude_ids.push(account.id);
+                switch_count += 1;
+                std::mem::forget(_guard);
+                self.account_svc.release_slot(account.id).await;
+                last_resp = Some(resp);
+                tokio::time::sleep(SWITCH_DELAY).await;
+                continue;
+            }
+
+            // 第三方计费(extra usage)拒绝：上游 400 invalid_request_error，不是该号"坏了"而是被判第三方。
+            // 临时隔离该号(短冷却,让粘性会话改绑别的号)并换下一个健康账号,客户端不再吃到这个原始错误。
+            if billing_reject {
+                if switch_count >= MAX_ACCOUNT_SWITCHES {
+                    warn!(
+                        "max account switches ({}) reached on third-party billing, returning error to client",
+                        MAX_ACCOUNT_SWITCHES
+                    );
+                    return Ok(resp);
+                }
+                warn!(
+                    "account {} third-party billing rejected, quarantine {}s + switch",
+                    account.id, THIRD_PARTY_BILLING_COOLDOWN_SECS
+                );
+                let cooldown =
+                    Utc::now() + chrono::Duration::seconds(THIRD_PARTY_BILLING_COOLDOWN_SECS);
+                let _ = self
+                    .account_svc
+                    .disable_account(
+                        account.id,
+                        AccountStatus::Active,
+                        "第三方计费(extra usage),临时隔离",
+                        Some(cooldown),
+                    )
+                    .await;
                 exclude_ids.push(account.id);
                 switch_count += 1;
                 std::mem::forget(_guard);
@@ -709,7 +753,7 @@ impl GatewayService {
         body: &[u8],
         account: &Account,
         log: LogCtx,
-    ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response), AppError> {
+    ) -> Result<(StatusCode, reqwest::header::HeaderMap, Response, bool), AppError> {
         let upstream_base =
             std::env::var("UPSTREAM_BASE").unwrap_or_else(|_| UPSTREAM_BASE.to_string());
         // path + query(确保带 beta=true)
@@ -768,16 +812,25 @@ impl GatewayService {
 
         let mut status_code_u16 = resp.status().as_u16();
         let mut upstream_headers = resp.headers().clone();
+        // 命中「第三方计费(extra usage)」拒绝时置位,供重试循环隔离该号并换号兜底。
+        let mut billing_reject = false;
 
-        // thinking 块 400 自动整流重试（全局开关开 + 上游 400 + thinking/签名类错误）。
-        // 命中时要先读响应体（消费 resp），故统一用 UpstreamBody 承载"流式 resp / 已缓冲字节"两种来源。
-        let body_src: UpstreamBody = if status_code_u16 == 400
-            && self
+        // 400 一律缓冲错误体（很小）以便检测:① 第三方计费(extra usage)→ 隔离换号;
+        // ② thinking/tool 签名 → 整流重试。命中时已消费 resp,故用 UpstreamBody 承载"流式/已缓冲"两种来源。
+        let body_src: UpstreamBody = if status_code_u16 == 400 {
+            let err0 = resp.bytes().await.unwrap_or_default();
+            if is_third_party_billing_error(&err0) {
+                warn!(
+                    "account {}: 第三方计费拒绝(extra usage),隔离并换号",
+                    account.id
+                );
+                billing_reject = true;
+                UpstreamBody::Buffered(err0)
+            } else if self
                 .thinking_repair
                 .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let err0 = resp.bytes().await.unwrap_or_default();
-            if crate::service::thinking_repair::is_thinking_signature_error(&err0) {
+                && crate::service::thinking_repair::is_thinking_signature_error(&err0)
+            {
                 warn!(
                     "account {}: 400 thinking-signature error, retrying with filtered thinking blocks",
                     account.id
@@ -920,7 +973,7 @@ impl GatewayService {
             .body(axum_body)
             .map_err(|e| AppError::Internal(format!("build response: {}", e)))?;
 
-        Ok((status_code, upstream_headers, response))
+        Ok((status_code, upstream_headers, response, billing_reject))
     }
 
 }
