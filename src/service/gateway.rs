@@ -758,7 +758,12 @@ impl GatewayService {
         .await
         .map_err(|e| {
             warn!("upstream error for account {}: {}", account.id, e);
-            AppError::BadGateway("upstream request failed".into())
+            // 把真实出口错误(连接重置/超时/TLS 等)带进响应体,便于上层中转/客户端定位,
+            // 不再一律回写死的 "upstream request failed"。
+            AppError::BadGateway(format!(
+                "upstream request failed (account {}): {}",
+                account.id, e
+            ))
         })?;
 
         let mut status_code_u16 = resp.status().as_u16();
